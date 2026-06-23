@@ -62,13 +62,7 @@ class AssetLoader:
                 QFontDatabase.addApplicationFont(str(path))
 
         self.font = QFont()
-        self.font.setFamilies([
-            "Microsoft YaHei",
-            "Microsoft Tai Le",
-            "Noto Sans Tai Tham",
-            "Segoe UI Emoji",
-            "Segoe UI Symbol",
-        ])
+        self.font.setFamilies(["Microsoft YaHei", "Microsoft Himalaya", "Microsoft Tai Le", "Noto Sans Tai Tham", "Leelawadee UI", "Malgun Gothic", "Segoe UI", "Segoe UI Emoji", "Segoe UI Symbol"])
         self.font.setPointSize(FONT_SIZE)
         self.font.setBold(True)
         self.font.setStyleStrategy(QFont.StyleStrategy.PreferQuality)

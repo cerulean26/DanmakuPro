@@ -4,32 +4,16 @@
 """
 
 import argparse
-import sys
-from pathlib import Path
 
 from loguru import logger
 
-try:
-    from .burner import DanmakuBurner   # 包内执行 → 成功
-except ImportError:
-    from danmakupro.burner import DanmakuBurner # 脚本执行 → 回退
-    
-_LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
-
-def _configure_logger() -> None:
-    """配置 loguru 日志：stderr 输出 INFO 级别，文件输出 DEBUG 级别。"""
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logger.remove()
-    logger.add(sys.stderr, level="INFO", format="{time} | {level} | {message}")
-    logger.add(
-        str(_LOG_DIR / "ffmpeg.log"), level="DEBUG", rotation="100 MB",
-        format="{time} | {level} | {message}",
-    )
+from .burner import DanmakuBurner
+from .logger_config import configure_logger
 
 
 def main() -> None:
     """主入口函数：解析命令行参数，启动压制引擎"""
-    _configure_logger()
+    configure_logger()
 
     parser = argparse.ArgumentParser(
         prog="danmakupro",

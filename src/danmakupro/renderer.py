@@ -36,44 +36,67 @@ class DanmakuRenderer:
 
     def render_frame(
         self,
-        active_danmakus: list[ActiveDanmaku],
+        text_danmakus: list[ActiveDanmaku],
+        gift_danmakus: list[ActiveDanmaku],
         layer_params: LayerParams,
         layout_params: LayoutParams,
-        fade_out_zone: float,
-        fade_out_threshold: float,
+        text_fade_out_zone: float,
+        text_fade_out_threshold: float,
+        gift_fade_out_zone: float,
+        gift_fade_out_threshold: float,
     ) -> None:
         """渲染当前帧的所有弹幕到画布。
 
-        包括淡出效果：弹幕接近屏幕顶部时逐渐透明，完全飞出时不可见。
+        先渲染礼物区（上方），再渲染文本区（下方），各自独立淡出。
 
         Args:
-            active_danmakus: 当前活跃的弹幕列表
+            text_danmakus: 当前活跃的文本弹幕列表
+            gift_danmakus: 当前活跃的礼物弹幕列表
             layer_params: 渲染层参数
             layout_params: 布局参数
-            fade_out_zone: 淡出区域高度
-            fade_out_threshold: 淡出起始阈值
+            text_fade_out_zone: 文本区淡出区域高度
+            text_fade_out_threshold: 文本区淡出起始阈值
+            gift_fade_out_zone: 礼物区淡出区域高度
+            gift_fade_out_threshold: 礼物区淡出起始阈值
         """
         layer_y = layer_params.layer_y
         max_y_limit = layout_params.max_y_limit
+        gift_y_limit = layout_params.gift_y_limit
 
         self.canvas.fill(Qt.GlobalColor.transparent)
 
-        for dm in active_danmakus:
+        # 先渲染礼物区（上方）
+        for dm in gift_danmakus:
             cy = dm.current_y
             alpha = 1.0
 
-            if cy < fade_out_threshold:
-                if cy <= max_y_limit:
+            if cy < gift_fade_out_threshold:
+                if cy <= gift_y_limit:
                     continue
                 else:
-                    alpha = (cy - max_y_limit) / fade_out_zone
+                    alpha = (cy - gift_y_limit) / gift_fade_out_zone
                     alpha = max(0.0, min(1.0, alpha))
 
             self.painter.setOpacity(alpha)
-
             local_x = dm.x - layer_params.layer_x
             local_y = int(dm.current_y) - layer_y
+            dm.render(self.painter, local_x, local_y)
 
+        # 再渲染文本区（下方）
+        for dm in text_danmakus:
+            cy = dm.current_y
+            alpha = 1.0
+
+            if cy < text_fade_out_threshold:
+                if cy <= max_y_limit:
+                    continue
+                else:
+                    alpha = (cy - max_y_limit) / text_fade_out_zone
+                    alpha = max(0.0, min(1.0, alpha))
+
+            self.painter.setOpacity(alpha)
+            local_x = dm.x - layer_params.layer_x
+            local_y = int(dm.current_y) - layer_y
             dm.render(self.painter, local_x, local_y)
 
     def get_frame_data(self) -> memoryview:

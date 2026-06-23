@@ -26,7 +26,7 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 
-from .config import H264_ALIGNMENT
+from .config import H264_ALIGNMENT, FADE_OUT_ZONE, GIFT_FADE_OUT_ZONE, GIFT_DAMPING_FACTOR, GIFT_DWELL_TIME
 from .models import ActiveDanmaku
 from .parser import parse_xml
 from .asset_loader import AssetLoader
@@ -96,7 +96,13 @@ class DanmakuBurner:
 
         active_danmakus: list[ActiveDanmaku] = []
         event_idx = 0
-        fade_out_zone, fade_out_threshold = LayoutEngine.get_fade_out_params(layout_params)
+
+        text_fade_out_zone, text_fade_out_threshold = LayoutEngine.get_fade_out_params(
+            layout_params.max_y_limit, FADE_OUT_ZONE,
+        )
+        gift_fade_out_zone, gift_fade_out_threshold = LayoutEngine.get_fade_out_params(
+            layout_params.gift_y_limit, GIFT_FADE_OUT_ZONE,
+        )
 
         for frame_idx in tqdm(range(total_frames), desc="视频压制进度", unit="帧"):
             current_time = frame_idx / fps
@@ -106,15 +112,50 @@ class DanmakuBurner:
                 loader.font, loader.emoji_cache, loader.gift_cache, loader.bg_color,
             )
 
-            LayoutEngine.update_positions(active_danmakus, is_any_new_spawned, layout_params)
+            # 拆分文本弹幕和礼物弹幕
+            text_danmakus: list[ActiveDanmaku] = []
+            gift_danmakus: list[ActiveDanmaku] = []
+            text_has_new = False
+            gift_has_new = False
+            for dm in active_danmakus:
+                if dm.event.is_gift:
+                    gift_danmakus.append(dm)
+                    if is_any_new_spawned:
+                        gift_has_new = True
+                else:
+                    text_danmakus.append(dm)
+                    if is_any_new_spawned:
+                        text_has_new = True
 
-            LayoutEngine.recycle_out_of_bounds(active_danmakus, layout_params)
+            # 文本区：从 container_bottom 到 max_y_limit
+            LayoutEngine.update_positions(
+                text_danmakus, text_has_new,
+                layout_params.container_bottom, layout_params.bubble_vertical_gap,
+            )
+            LayoutEngine.recycle_out_of_bounds(text_danmakus, layout_params.max_y_limit)
+            LayoutEngine.handle_collisions(
+                text_danmakus, layout_params.max_y_limit, layout_params.bubble_vertical_gap,
+            )
 
-            LayoutEngine.handle_collisions(active_danmakus, layout_params)
+            # 礼物区：从 max_y_limit 到 gift_y_limit
+            LayoutEngine.update_positions(
+                gift_danmakus, gift_has_new,
+                layout_params.max_y_limit, layout_params.bubble_vertical_gap,
+                GIFT_DAMPING_FACTOR,
+            )
+            LayoutEngine.recycle_out_of_bounds(gift_danmakus, layout_params.gift_y_limit, current_time, GIFT_DWELL_TIME)
+            LayoutEngine.handle_collisions(
+                gift_danmakus, layout_params.gift_y_limit, layout_params.bubble_vertical_gap,
+            )
+
+            # 合并回活跃列表（供下一帧 spawn 使用）
+            active_danmakus = text_danmakus + gift_danmakus
 
             renderer.render_frame(
-                active_danmakus, layer_params, layout_params,
-                fade_out_zone, fade_out_threshold,
+                text_danmakus, gift_danmakus,
+                layer_params, layout_params,
+                text_fade_out_zone, text_fade_out_threshold,
+                gift_fade_out_zone, gift_fade_out_threshold,
             )
 
             ffmpeg.write_frame(renderer.get_frame_data())

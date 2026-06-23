@@ -75,6 +75,7 @@ class ActiveDanmaku:
         'total_width', 'height', 'padding_x', 'padding_y', 'line_height',
         'row_gap', 'radius', 'is_locked_to_next', 'is_first_activation',
         'text_ascent', 'text_descent', 'vertical_padding', 'cached_image',
+        'activation_time',
     ]
 
     # 颜色常量
@@ -116,6 +117,7 @@ class ActiveDanmaku:
         self.radius = BUBBLE_MULTILINE_RADIUS
         self.is_locked_to_next = False     # 是否锁定到下一个弹幕（碰撞处理）
         self.is_first_activation = True    # 是否首次激活（用于入场动画）
+        self.activation_time = 0.0         # 首次激活的时间戳（秒），由 spawn_new_danmakus 设置
 
         # 构建渲染段落 -> 折行 -> 计算尺寸
         raw_segments = self._build_raw_segments(font_metrics, emoji_cache, gift_cache)

@@ -14,6 +14,8 @@ class LayoutParams:
     max_y_limit: int
     max_content_width: int
     bubble_vertical_gap: int
+    gift_y_limit: int          # 礼物区顶部边界
+    gift_zone_height: int      # 礼物区高度（像素）
 
 
 @dataclass(frozen=True)

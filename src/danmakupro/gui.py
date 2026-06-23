@@ -124,12 +124,13 @@ def select_files() -> tuple[str, str]:
     return video_path, xml_path
 
 
+from .logger_config import configure_logger
+from .burner import DanmakuBurner
+
+
 def main() -> None:
     """GUI 入口：弹出文件选择对话框，选定文件后启动压制引擎"""
-    try:
-        from .burner import DanmakuBurner
-    except ImportError:
-        from danmakupro.burner import DanmakuBurner
+    configure_logger()
 
     video_path, xml_path = select_files()
     burner = DanmakuBurner(video_in=video_path, xml_in=xml_path)

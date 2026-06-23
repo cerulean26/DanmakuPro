@@ -7,12 +7,13 @@ import bisect
 from typing import TYPE_CHECKING
 
 from loguru import logger
-from tqdm import tqdm
 
 from .config import (
     DANMAKU_X, BUBBLE_VERTICAL_GAP, LAYER_WIDTH_EXTRA,
     CONTAINER_BOTTOM_RATIO, MAX_CONTAINER_HEIGHT_RATIO, MAX_CONTENT_WIDTH_RATIO,
+    GIFT_ZONE_HEIGHT_RATIO, GIFT_DAMPING_FACTOR,
     SPAWN_BACKLOG_DIVISOR, DAMPING_FACTOR, POSITION_THRESHOLD, FADE_OUT_ZONE,
+    GIFT_FADE_OUT_ZONE,
 )
 from .models import DanmakuEvent, ActiveDanmaku
 from .layout_params import LayoutParams, LayerParams
@@ -58,12 +59,15 @@ class LayoutEngine:
         container_bottom = int(h * CONTAINER_BOTTOM_RATIO)
         max_container_height = int(h * MAX_CONTAINER_HEIGHT_RATIO)
         max_y_limit = container_bottom - max_container_height
+        gift_zone_height = int(h * GIFT_ZONE_HEIGHT_RATIO)
+        gift_y_limit = max_y_limit - gift_zone_height
         max_content_width = int(w * MAX_CONTENT_WIDTH_RATIO)
         bubble_vertical_gap = BUBBLE_VERTICAL_GAP
 
         logger.info(
             f"布局参数: 尺寸={w}x{h} | "
-            f"弹幕区=底部{max_container_height}px | "
+            f"文本区=底部{max_container_height}px | "
+            f"礼物区=上方{gift_zone_height}px | "
             f"最大内容宽度={max_content_width}"
         )
 
@@ -73,12 +77,14 @@ class LayoutEngine:
             max_y_limit=max_y_limit,
             max_content_width=max_content_width,
             bubble_vertical_gap=bubble_vertical_gap,
+            gift_y_limit=gift_y_limit,
+            gift_zone_height=gift_zone_height,
         )
 
         layer_x = DANMAKU_X
         layer_w = max_content_width + LAYER_WIDTH_EXTRA
-        layer_y = max_y_limit
-        layer_h = container_bottom - max_y_limit
+        layer_y = gift_y_limit
+        layer_h = container_bottom - gift_y_limit
 
         if layer_x + layer_w > w:
             layer_w = max(0, w - layer_x)
@@ -112,7 +118,7 @@ class LayoutEngine:
         loader = self._asset_loader
         danmaku_pool: list[ActiveDanmaku] = []
 
-        for event in tqdm(events, desc="弹幕预创建", unit="条"):
+        for event in events:
             dm = ActiveDanmaku(
                 event,
                 loader.fm,
@@ -172,6 +178,7 @@ class LayoutEngine:
             dm = danmaku_pool[event_idx]
             if dm.cached_image is None:
                 dm._pre_render(font, emoji_cache, gift_cache, bg_color)
+            dm.activation_time = current_time
             active_danmakus.append(dm)
             event_idx += 1
             spawned_count += 1
@@ -183,7 +190,9 @@ class LayoutEngine:
     def update_positions(
         active_danmakus: list[ActiveDanmaku],
         is_any_new_spawned: bool,
-        layout_params: LayoutParams,
+        zone_bottom: int,
+        bubble_vertical_gap: int,
+        damping: float = DAMPING_FACTOR,
     ) -> None:
         """更新所有活跃弹幕的位置。
 
@@ -194,13 +203,12 @@ class LayoutEngine:
         Args:
             active_danmakus: 当前活跃的弹幕列表
             is_any_new_spawned: 本帧是否有新弹幕生成
-            layout_params: 布局参数
+            zone_bottom: 区域底部 Y 坐标
+            bubble_vertical_gap: 弹幕间距
+            damping: 阻尼系数（文本区默认 0.25，礼物区默认 0.15）
         """
-        container_bottom = layout_params.container_bottom
-        bubble_vertical_gap = layout_params.bubble_vertical_gap
-
         if is_any_new_spawned and active_danmakus:
-            last_target_y = container_bottom
+            last_target_y = zone_bottom
             gap = bubble_vertical_gap
             for dm in reversed(active_danmakus):
                 h = dm.height
@@ -208,11 +216,10 @@ class LayoutEngine:
                 last_target_y = dm.target_y - gap
                 dm.is_locked_to_next = False
 
-        damping = DAMPING_FACTOR
         threshold = POSITION_THRESHOLD
         for dm in active_danmakus:
             if dm.is_first_activation:
-                dm.current_y = container_bottom - dm.height
+                dm.current_y = zone_bottom - dm.height
                 dm.is_first_activation = False
             ty = dm.target_y
             cy = dm.current_y
@@ -223,7 +230,8 @@ class LayoutEngine:
     @staticmethod
     def handle_collisions(
         active_danmakus: list[ActiveDanmaku],
-        layout_params: LayoutParams,
+        zone_top: int,
+        bubble_vertical_gap: int,
     ) -> None:
         """碰撞检测与处理：确保所有弹幕在物理上不重叠。
 
@@ -232,28 +240,22 @@ class LayoutEngine:
 
         Args:
             active_danmakus: 当前活跃的弹幕列表
-            layout_params: 布局参数
+            zone_top: 区域顶部 Y 坐标（超出此值视为不可见）
+            bubble_vertical_gap: 弹幕间距
         """
         n = len(active_danmakus)
         if n <= 1:
             return
 
-        max_y_limit = layout_params.max_y_limit
-        bubble_vertical_gap = layout_params.bubble_vertical_gap
+        gap = bubble_vertical_gap
 
         visible_start = 0
         while visible_start < n:
             dm = active_danmakus[visible_start]
-            if dm.current_y + dm.height <= max_y_limit:
+            if dm.current_y + dm.height <= zone_top:
                 visible_start += 1
             else:
                 break
-
-        visible_count = n - visible_start
-        if visible_count <= 1:
-            return
-
-        gap = bubble_vertical_gap
 
         for i in range(n - 2, visible_start - 1, -1):
             curr_dm = active_danmakus[i]
@@ -277,32 +279,44 @@ class LayoutEngine:
     @staticmethod
     def recycle_out_of_bounds(
         active_danmakus: list[ActiveDanmaku],
-        layout_params: LayoutParams,
+        zone_top: int,
+        current_time: float | None = None,
+        dwell_time: float | None = None,
     ) -> None:
-        """回收超出屏幕范围的弹幕，释放缓存图片以控制内存。
+        """回收超出屏幕范围或超时的弹幕，释放缓存图片以控制内存。
 
         Args:
             active_danmakus: 当前活跃的弹幕列表（原地修改）
-            layout_params: 布局参数
+            zone_top: 区域顶部 Y 坐标（超出此值即回收）
+            current_time: 当前视频时间戳（秒），用于时间过期检测
+            dwell_time: 停留时间上限（秒），超过即回收；None 表示不启用
         """
         remaining: list[ActiveDanmaku] = []
         for dm in active_danmakus:
-            if dm.is_out_of_bounds(layout_params.max_y_limit):
+            out_of_bounds = dm.is_out_of_bounds(zone_top)
+            expired = (
+                dwell_time is not None
+                and current_time is not None
+                and (current_time - dm.activation_time) > dwell_time
+            )
+            if out_of_bounds or expired:
                 dm.cached_image = QImage()  # 显式触发 C++ 析构，立即释放像素缓冲区
             else:
                 remaining.append(dm)
         active_danmakus[:] = remaining
 
     @staticmethod
-    def get_fade_out_params(layout_params: LayoutParams) -> tuple[float, float]:
+    def get_fade_out_params(
+        zone_top: int, fade_out_zone: float,
+    ) -> tuple[float, float]:
         """计算淡出区域参数。
 
         Args:
-            layout_params: 布局参数
+            zone_top: 区域顶部 Y 坐标
+            fade_out_zone: 淡出区域高度
 
         Returns:
             (fade_out_zone, fade_out_threshold) 元组
         """
-        fade_out_zone = FADE_OUT_ZONE
-        fade_out_threshold = layout_params.max_y_limit + fade_out_zone
+        fade_out_threshold = zone_top + fade_out_zone
         return fade_out_zone, fade_out_threshold
