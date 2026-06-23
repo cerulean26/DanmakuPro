@@ -15,6 +15,7 @@ from danmakupro.models import DanmakuEvent, ActiveDanmaku
 from danmakupro.config import (
     DANMAKU_X, BUBBLE_VERTICAL_GAP, LAYER_WIDTH_EXTRA,
     CONTAINER_BOTTOM_RATIO, MAX_CONTAINER_HEIGHT_RATIO, MAX_CONTENT_WIDTH_RATIO,
+    GIFT_ZONE_HEIGHT_RATIO,
     DAMPING_FACTOR, FADE_OUT_ZONE,
 )
 
@@ -41,6 +42,8 @@ def _make_layout_params(w: int = 1920, h: int = 1080) -> LayoutParams:
     container_bottom = int(h * CONTAINER_BOTTOM_RATIO)
     max_container_height = int(h * MAX_CONTAINER_HEIGHT_RATIO)
     max_y_limit = container_bottom - max_container_height
+    gift_zone_height = int(h * GIFT_ZONE_HEIGHT_RATIO)
+    gift_y_limit = max_y_limit - gift_zone_height
     max_content_width = int(w * MAX_CONTENT_WIDTH_RATIO)
     return LayoutParams(
         container_bottom=container_bottom,
@@ -48,6 +51,8 @@ def _make_layout_params(w: int = 1920, h: int = 1080) -> LayoutParams:
         max_y_limit=max_y_limit,
         max_content_width=max_content_width,
         bubble_vertical_gap=BUBBLE_VERTICAL_GAP,
+        gift_y_limit=gift_y_limit,
+        gift_zone_height=gift_zone_height,
     )
 
 
@@ -72,8 +77,8 @@ class TestCalculateParams:
     def test_layer_params(self):
         lp, layer = LayoutEngine.calculate_params(1920, 1080)
         assert layer.layer_x == DANMAKU_X
-        assert layer.layer_y == lp.max_y_limit
-        assert layer.layer_h == lp.container_bottom - lp.max_y_limit
+        assert layer.layer_y == lp.gift_y_limit
+        assert layer.layer_h == lp.container_bottom - lp.gift_y_limit
         expected_w = lp.max_content_width + LAYER_WIDTH_EXTRA
         assert layer.layer_w == expected_w
 
@@ -103,7 +108,7 @@ class TestUpdatePositions:
         dm.target_y = 0.0
         dm.is_first_activation = True
 
-        LayoutEngine.update_positions([dm], True, lp)
+        LayoutEngine.update_positions([dm], True, lp.container_bottom, lp.bubble_vertical_gap)
 
         assert dm.target_y == lp.container_bottom - dm.height
         assert not dm.is_first_activation
@@ -117,7 +122,7 @@ class TestUpdatePositions:
         dm.target_y = 0.0
         dm.is_first_activation = True
 
-        LayoutEngine.update_positions([dm], True, lp)
+        LayoutEngine.update_positions([dm], True, lp.container_bottom, lp.bubble_vertical_gap)
 
         assert dm.current_y == lp.container_bottom - dm.height
 
@@ -130,7 +135,7 @@ class TestUpdatePositions:
         dm.current_y = 500.0
         dm.target_y = 400.0
 
-        LayoutEngine.update_positions([dm], False, lp)
+        LayoutEngine.update_positions([dm], False, lp.container_bottom, lp.bubble_vertical_gap)
 
         expected = 500.0 + (400.0 - 500.0) * DAMPING_FACTOR
         assert abs(dm.current_y - expected) < 0.01
@@ -146,7 +151,7 @@ class TestUpdatePositions:
             dm.current_y = 0.0
             dm.target_y = 0.0
 
-        LayoutEngine.update_positions([dm1, dm2], True, lp)
+        LayoutEngine.update_positions([dm1, dm2], True, lp.container_bottom, lp.bubble_vertical_gap)
 
         assert dm2.target_y == lp.container_bottom - dm2.height
         assert dm1.target_y == dm2.target_y - lp.bubble_vertical_gap - dm1.height
@@ -166,7 +171,7 @@ class TestHandleCollisions:
         dm.current_y = lp.container_bottom - dm.height
         original_y = dm.current_y
 
-        LayoutEngine.handle_collisions([dm], lp)
+        LayoutEngine.handle_collisions([dm], lp.max_y_limit, lp.bubble_vertical_gap)
 
         assert dm.current_y == original_y
 
@@ -182,14 +187,14 @@ class TestHandleCollisions:
         dm1.target_y = dm1.current_y
         dm1.is_locked_to_next = False
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp)
+        LayoutEngine.handle_collisions([dm1, dm2], lp.max_y_limit, lp.bubble_vertical_gap)
 
         expected_top = dm2.current_y - lp.bubble_vertical_gap - dm1.height
         assert dm1.current_y <= expected_top + 1
 
     def test_empty_list_no_error(self):
         lp = _make_layout_params()
-        LayoutEngine.handle_collisions([], lp)
+        LayoutEngine.handle_collisions([], lp.max_y_limit, lp.bubble_vertical_gap)
 
 
 # =============================================================================
@@ -206,7 +211,7 @@ class TestRecycleOutOfBounds:
         dm.current_y = lp.container_bottom - dm.height
         active = [dm]
 
-        LayoutEngine.recycle_out_of_bounds(active, lp)
+        LayoutEngine.recycle_out_of_bounds(active, lp.max_y_limit)
 
         assert len(active) == 1
 
@@ -220,7 +225,7 @@ class TestRecycleOutOfBounds:
         assert dm.cached_image is not None
         active = [dm]
 
-        LayoutEngine.recycle_out_of_bounds(active, lp)
+        LayoutEngine.recycle_out_of_bounds(active, lp.max_y_limit)
 
         assert len(active) == 0
         assert dm.cached_image.isNull()
@@ -235,7 +240,7 @@ class TestRecycleOutOfBounds:
 
         active = [dm_in, dm_out]
 
-        LayoutEngine.recycle_out_of_bounds(active, lp)
+        LayoutEngine.recycle_out_of_bounds(active, lp.max_y_limit)
 
         assert len(active) == 1
         assert active[0] is dm_in
@@ -249,14 +254,18 @@ class TestRecycleOutOfBounds:
 class TestGetFadeOutParams:
     def test_returns_correct_values(self):
         lp = _make_layout_params()
-        fade_out_zone, fade_out_threshold = LayoutEngine.get_fade_out_params(lp)
+        fade_out_zone, fade_out_threshold = LayoutEngine.get_fade_out_params(
+            lp.max_y_limit, FADE_OUT_ZONE,
+        )
 
         assert fade_out_zone == FADE_OUT_ZONE
         assert fade_out_threshold == lp.max_y_limit + FADE_OUT_ZONE
 
     def test_threshold_greater_than_limit(self):
         lp = _make_layout_params()
-        _, fade_out_threshold = LayoutEngine.get_fade_out_params(lp)
+        _, fade_out_threshold = LayoutEngine.get_fade_out_params(
+            lp.max_y_limit, FADE_OUT_ZONE,
+        )
 
         assert fade_out_threshold > lp.max_y_limit
 
@@ -354,7 +363,7 @@ class TestHandleCollisionsLocking:
         dm1.current_y = dm2.current_y - lp.bubble_vertical_gap - dm1.height - 50
         dm1.target_y = dm1.current_y
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp)
+        LayoutEngine.handle_collisions([dm1, dm2], lp.max_y_limit, lp.bubble_vertical_gap)
 
         expected_y = dm2.current_y - lp.bubble_vertical_gap - dm1.height
         assert dm1.current_y == expected_y
@@ -369,4 +378,4 @@ class TestHandleCollisionsLocking:
         dm1.current_y = lp.max_y_limit - dm1.height - 200
         dm2.current_y = lp.max_y_limit - dm2.height - 100
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp)
+        LayoutEngine.handle_collisions([dm1, dm2], lp.max_y_limit, lp.bubble_vertical_gap)
