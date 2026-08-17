@@ -47,7 +47,7 @@ def _assert_positive(obj: object, *names: str) -> None:
 class LayoutStyle:
     """布局样式配置"""
     danmaku_x: int = 30
-    layer_width_extra: int = 100
+    layer_width_extra: int = 100 
     bubble_padding_x: int = 14
     bubble_padding_y: int = 5
     bubble_row_gap: int = 5

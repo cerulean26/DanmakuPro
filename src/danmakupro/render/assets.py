@@ -68,7 +68,6 @@ def load_image_assets(
 
     if missing:
         logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
-    logger.info(f"{asset_type} 预加载完成: {len(cache)} 个, 缺失: {len(missing)} 个")
     return missing
 
 

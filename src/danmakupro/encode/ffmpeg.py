@@ -139,7 +139,6 @@ class FFmpegManager:
 
     def get_video_info(self) -> dict[str, int | float]:
         """获取视频元数据"""
-        logger.info("正在获取视频元数据...")
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height,r_frame_rate,nb_frames:format=duration",
@@ -156,7 +155,6 @@ class FFmpegManager:
             dur = float(data["format"]["duration"])
             frames = int(dur * fps)
 
-        logger.info(f"视频: {int(info['width'])}x{int(info['height'])} @ {fps:.2f}fps, {frames} 帧")
         return {"w": int(info["width"]), "h": int(info["height"]), "fps": fps, "frames": frames}
 
     def build_command(self, fps: float, w: int, h: int, layer_params: LayerParams) -> list[str]:
@@ -276,7 +274,7 @@ class FFmpegManager:
         self._frame_queue = queue.Queue()
         self._writer_thread = threading.Thread(target=self._pipe_writer_loop, daemon=True)
         self._writer_thread.start()
-        logger.info("FFmpeg 已启动（异步写入）")
+        logger.debug("FFmpeg 写入线程已启动")
 
     def _health_check(self) -> bool:
         """检查 FFmpeg 进程是否存活"""
@@ -360,12 +358,12 @@ class FFmpegManager:
         # 第一步：停止异步写入线程
         if self._frame_queue is not None and self._writer_thread is not None:
             self._frame_queue.put(self._SENTINEL)
-            logger.info("等待写入线程完成...")
+            logger.debug("等待写入线程完成...")
             self._writer_thread.join(timeout=300.0)
             if self._writer_thread.is_alive():
                 logger.warning("写入线程超时，强制终止")
             else:
-                logger.info("写入线程已完成")
+                logger.debug("写入线程已完成")
 
         proc = self.process
         if proc is None:
@@ -383,7 +381,7 @@ class FFmpegManager:
             self.stderr_thread.join(timeout=self.system_params.stderr_thread_timeout)
 
         # 第四步：等待 FFmpeg 进程退出
-        logger.info("等待 FFmpeg 完成编码...")
+        logger.debug("等待 FFmpeg 完成编码...")
         try:
             return_code = proc.wait(timeout=300.0)
             if return_code == 0:

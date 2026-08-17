@@ -103,7 +103,10 @@ class ErrorHandler:
         context: ErrorContext | None = None,
         log_level: str = "error",
     ) -> None:
-        """记录错误并抛出，终止当前任务。"""
+        """记录错误日志（含结构化上下文），不抛出。
+
+        调用方自行决定是否 re-raise 或包装异常类型。
+        """
         context = context or ErrorContext()
 
         if isinstance(error, DanmakuProError):
@@ -121,8 +124,6 @@ class ErrorHandler:
 
         if context.details:
             logger.debug(f"错误详情: {context.details}")
-
-        raise error
 
     @classmethod
     def _classify_error(cls, error: Exception) -> ErrorCategory:
@@ -149,7 +150,10 @@ def handle_error(
     frame_idx: int | None = None,
     **details: Any,
 ) -> None:
-    """记录错误并抛出，终止当前任务。"""
+    """记录错误日志（含结构化上下文），不抛出。
+
+    调用方自行决定是否 re-raise 或包装异常类型。
+    """
     context = ErrorContext(
         component=component,
         operation=operation,

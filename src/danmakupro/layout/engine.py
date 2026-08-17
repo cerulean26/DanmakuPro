@@ -8,8 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from loguru import logger
-
 from ..config.models import LayoutStyle, LayoutRatio, AnimationParams, DEFAULT_CONFIG
 
 if TYPE_CHECKING:
@@ -100,7 +98,6 @@ class LayoutEngine:
         """
         from ..input.models import ActiveDanmaku
 
-        logger.info(f"预创建 {len(events)} 个弹幕对象...")
         pool: list[ActiveDanmaku] = []
 
         for event in events:
