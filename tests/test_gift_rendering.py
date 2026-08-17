@@ -82,8 +82,7 @@ class TestGiftParsing:
 
     def test_gift_price_filter(self, sample_xml: Path):
         """验证礼物价格过滤功能"""
-        # 设置最低价格为 1000，只保留保时捷（12000）
-        events = parse_xml(str(sample_xml), min_gift_price=1000.0)
+        events = parse_xml(str(sample_xml), min_gift_price=10.0)
         gift_events = [e for e in events if e.is_gift]
 
         assert len(gift_events) == 1

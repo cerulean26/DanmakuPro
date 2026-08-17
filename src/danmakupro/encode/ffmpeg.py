@@ -10,7 +10,6 @@ import os
 import queue
 import subprocess
 import threading
-import time
 
 from loguru import logger
 
@@ -325,7 +324,7 @@ class FFmpegManager:
                 break
         self._queue_frame_size = max(0, self._queue_frame_size - dropped)
 
-    def submit_frame(self, data: memoryview) -> bool:
+    def submit_frame(self, data: bytes) -> bool:
         """提交一帧数据（统一使用异步写入）。"""
         if self._writer_error_event.is_set() and self._writer_error is not None:
             raise self._writer_error
@@ -344,7 +343,7 @@ class FFmpegManager:
                 self._queue_not_full.wait(timeout=1.0)
                 if self._writer_error_event.is_set():
                     raise self._writer_error or RuntimeError("FFmpeg 写入线程出错")
-        self._frame_queue.put(data.tobytes())
+        self._frame_queue.put(data)
         self._queue_frame_size += 1
         return True
 

@@ -1,6 +1,6 @@
 """XML 弹幕解析器
 
-从 Bilibili 格式的 XML 文件中解析弹幕事件。
+从抖音格式的 XML 文件中解析弹幕事件。
 """
 
 from __future__ import annotations
@@ -16,10 +16,14 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
 
     Args:
         xml_path: XML 文件路径
-        min_gift_price: 最低礼物价格过滤
+        min_gift_price: 最低礼物价格过滤（单位：元）
 
     Returns:
         按时间排序的弹幕事件列表
+
+    Note:
+        XML 中 gift 的 price 属性单位为厘（1元=1000厘），
+        解析时自动转换为元。
     """
     logger.info(f"正在解析 XML: {xml_path}")
     events: list[DanmakuEvent] = []
@@ -45,8 +49,8 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
                 user = elem.get('user') or "匿名"
                 gift_name = elem.get('giftname') or ""
                 gift_count = int(elem.get('giftcount', 1))
-                price = float(elem.get('price', 0))
-                
+                price = float(elem.get('price', 0)) / 1000
+
                 if price >= min_gift_price:
                     events.append(DanmakuEvent(
                         time=time_val, user=user, text=f"{gift_name}x{gift_count}",

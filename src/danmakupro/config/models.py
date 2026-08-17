@@ -22,6 +22,24 @@ class EncodeMode(StrEnum):
 
 
 # =============================================================================
+# 校验辅助函数
+# =============================================================================
+
+def _assert_non_negative(obj: object, *names: str) -> None:
+    for name in names:
+        v = getattr(obj, name)
+        if v < 0:
+            raise ValueError(f"{name} 不能为负数，当前 {v}")
+
+
+def _assert_positive(obj: object, *names: str) -> None:
+    for name in names:
+        v = getattr(obj, name)
+        if v <= 0:
+            raise ValueError(f"{name} 必须 > 0，当前 {v}")
+
+
+# =============================================================================
 # 子配置
 # =============================================================================
 
@@ -38,29 +56,56 @@ class LayoutStyle:
     gift_spacing: int = 6
     emoji_spacing: int = 4
     font_size: int = 25
-    fade_out_zone: float = 30.0 # 淡出区域高度（像素）
+    fade_out_zone: float = 30.0
+
+    def __post_init__(self):
+        _assert_non_negative(self, "bubble_padding_x", "bubble_padding_y",
+                             "bubble_row_gap", "bubble_vertical_gap",
+                             "gift_spacing", "emoji_spacing", "danmaku_x",
+                             "layer_width_extra", "fade_out_zone")
+        _assert_positive(self, "font_size")
+        _assert_non_negative(self, "bubble_multiline_radius")
 
 
 @dataclass(frozen=True)
 class LayoutRatio:
-    """布局比例配置"""
-    bottom_ratio: float = 0.98
-    text_h_ratio: float = 0.2125
-    text_w_ratio: float = 0.8
-    gift_h_ratio: float = 0.075
+    """布局比例配置
+
+    使用"弹幕行数"替代"高度比例"，用户无需计算像素。
+    """
+    max_text_rows: int = 4
+    max_gift_rows: int = 2
+    text_width_ratio: float = 0.8
+    bottom_margin: int = 22
+
+    def __post_init__(self):
+        _assert_non_negative(self, "max_text_rows", "max_gift_rows", "bottom_margin")
+        if not (0 < self.text_width_ratio <= 1.0):
+            raise ValueError(f"text_width_ratio 必须在 (0, 1] 范围内，当前 {self.text_width_ratio}")
 
 
 @dataclass(frozen=True)
 class AnimationParams:
     """动画参数配置"""
-    text_damping_factor: float = 0.25 # 文本阻尼因子
-    gift_damping_factor: float = 0.25 # 礼物阻尼因子
-    text_spawn_interval: float = 0.5 # 文本弹幕生成间隔
-    text_spawn_batch_size: int = 3 # 文本弹幕生成批次大小
-    gift_spawn_interval: float = 0.5 # 礼物弹幕生成间隔
-    gift_spawn_batch_size: int = 2 # 礼物弹幕生成批次大小
-    gift_dwell_time: float | None = 5.0 # 礼物弹幕停留时间，单位秒
-    min_gift_price: float = 1.0 # 最低礼物价格过滤，低于此值不显示
+    text_damping_factor: float = 0.25
+    gift_damping_factor: float = 0.25
+    text_spawn_interval: float = 0.5
+    text_spawn_batch_size: int = 3
+    gift_spawn_interval: float = 0.5
+    gift_spawn_batch_size: int = 2
+    gift_dwell_time: float | None = 5.0
+    min_gift_price: float = 1.0
+
+    def __post_init__(self):
+        for name in ("text_damping_factor", "gift_damping_factor"):
+            v = getattr(self, name)
+            if not (0 < v <= 1.0):
+                raise ValueError(f"{name} 必须在 (0, 1] 范围内，当前 {v}")
+        _assert_non_negative(self, "text_spawn_interval", "gift_spawn_interval",
+                             "min_gift_price")
+        _assert_positive(self, "text_spawn_batch_size", "gift_spawn_batch_size")
+        if self.gift_dwell_time is not None and self.gift_dwell_time < 0:
+            raise ValueError(f"gift_dwell_time 不能为负数，当前 {self.gift_dwell_time}")
 
 
 @dataclass(frozen=True)
@@ -74,16 +119,35 @@ class EncodeParams:
     cpu_crf: int = 23
     cpu_min_reserve_threads: int = 2
 
+    def __post_init__(self):
+        for name in ("gpu_cq", "qsv_quality", "cpu_crf"):
+            v = getattr(self, name)
+            if not (0 <= v <= 51):
+                raise ValueError(f"{name} 必须在 [0, 51] 范围内，当前 {v}")
+        _assert_positive(self, "cpu_min_reserve_threads")
+        for name in ("gpu_preset", "qsv_preset", "cpu_preset"):
+            if not getattr(self, name):
+                raise ValueError(f"{name} 不能为空字符串")
+
 
 @dataclass(frozen=True)
 class SystemParams:
     """系统参数配置"""
-    pipe_buffer_size: int = 10_000_000 # 管道缓冲区大小
-    pipe_queue_size: int = 16 # 异步写入队列大小
-    ffmpeg_timeout: int = 10 # FFmpeg 超时时间
-    stderr_thread_timeout: int = 5 # stderr 线程超时时间
-    h264_alignment: int = 16 # H264 编码对齐大小
-    max_queue_frames: int = 64  # 异步写入队列最大帧数，防止内存无限增长
+    pipe_buffer_size: int = 10_000_000
+    pipe_queue_size: int = 16
+    ffmpeg_timeout: int = 10
+    stderr_thread_timeout: int = 5
+    video_alignment: int = 16
+    max_queue_frames: int = 64
+
+    def __post_init__(self):
+        _assert_positive(self, "pipe_buffer_size", "pipe_queue_size",
+                         "ffmpeg_timeout", "stderr_thread_timeout",
+                         "max_queue_frames")
+        if self.video_alignment <= 0 or (self.video_alignment & (self.video_alignment - 1)) != 0:
+            raise ValueError(
+                f"video_alignment 必须是 2 的幂，当前 {self.video_alignment}"
+            )
 
 
 # =============================================================================

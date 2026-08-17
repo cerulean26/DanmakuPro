@@ -61,8 +61,9 @@ def main() -> None:
         logger.error(f"[{e.category.value}] {e}")
         return
     except Exception as e:
-        recovery = handle_error(e, component="cli", operation="create_burner")
-        if recovery.name == "ABORT":
+        try:
+            handle_error(e, component="cli", operation="create_burner")
+        except Exception:
             logger.error(f"无法继续: {e}")
         return
 
@@ -73,10 +74,11 @@ def main() -> None:
         logger.error(f"压制失败 [{e.category.value}]: {e}")
         raise SystemExit(1)
     except Exception as e:
-        recovery = handle_error(e, component="cli", operation="run")
-        if recovery.name == "ABORT":
+        try:
+            handle_error(e, component="cli", operation="run")
+        except Exception:
             logger.error(f"压制失败: {e}")
-            raise SystemExit(1)
+        raise SystemExit(1)
     finally:
         app = QApplication.instance()
         if app is not None:

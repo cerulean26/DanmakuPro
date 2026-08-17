@@ -40,14 +40,27 @@ class LayoutEngine:
         w: int, h: int,
         style: LayoutStyle = DEFAULT_CONFIG.style,
         ratio: LayoutRatio = DEFAULT_CONFIG.ratio,
+        line_height: int = 0,
     ) -> tuple[LayoutParams, LayerParams]:
-        """计算布局参数"""
-        bottom = int(h * ratio.bottom_ratio)
-        text_h = int(h * ratio.text_h_ratio)
+        """计算布局参数
+
+        基于弹幕行数而非高度比例，用户只需指定"最多显示几行弹幕"。
+        Args:
+            w: 视频宽度
+            h: 视频高度
+            style: 布局样式
+            ratio: 布局比例
+            line_height: 实际行高（像素），由 QFontMetrics.height() 测量得到
+        """
+        bubble_height = 2 * style.bubble_padding_y + line_height
+        row_height = bubble_height + style.bubble_vertical_gap
+
+        text_h = ratio.max_text_rows * row_height
+        gift_h = ratio.max_gift_rows * row_height
+        bottom = h - ratio.bottom_margin
         text_top = bottom - text_h
-        gift_h = int(h * ratio.gift_h_ratio)
         gift_top = text_top - gift_h
-        text_w = int(w * ratio.text_w_ratio)
+        text_w = int(w * ratio.text_width_ratio)
 
         layout_params = LayoutParams(
             bottom=bottom,
@@ -324,6 +337,110 @@ class LayoutEngine:
             current_time: 当前时间（礼物停留计时用，可选）
             dwell_time: 停留时间（礼物用，可选）
         """
-        LayoutEngine.update_positions(active_danmakus, has_new, zone_bottom, gap, damping)
-        LayoutEngine.recycle_out_of_bounds(active_danmakus, zone_top, current_time, dwell_time)
-        LayoutEngine.handle_collisions(active_danmakus, zone_top, gap)
+        if not has_new and active_danmakus:
+            all_stable = _all_positions_stable(active_danmakus)
+        else:
+            all_stable = False
+
+        LayoutEngine._update_and_collide(
+            active_danmakus, has_new, zone_bottom, zone_top, gap, damping,
+            skip_collision=all_stable,
+        )
+        LayoutEngine.recycle_out_of_bounds(
+            active_danmakus, zone_top, current_time, dwell_time,
+        )
+
+    @staticmethod
+    def _update_and_collide(
+        active_danmakus: list['ActiveDanmaku'],
+        has_new: bool,
+        zone_bottom: int,
+        zone_top: int,
+        gap: int,
+        damping: float = 0.25,
+        position_threshold: float = 0.1,
+        skip_collision: bool = False,
+    ) -> None:
+        """合并位置更新和碰撞检测为一次遍历。
+
+        原来 update_positions + handle_collisions 需要两次遍历 active_danmakus，
+        合并后只需一次遍历即可完成位置更新 + 碰撞检测。
+
+        Args:
+            active_danmakus: 活跃弹幕列表
+            has_new: 是否有新弹幕加入
+            zone_bottom: 区域底部边界
+            zone_top: 区域顶部边界
+            gap: 弹幕间距
+            damping: 阻尼系数
+            position_threshold: 位置变化阈值
+            skip_collision: 是否跳过碰撞检测（所有弹幕位置已稳定时）
+        """
+        n = len(active_danmakus)
+        if n == 0:
+            return
+
+        # ---- 阶段 1：新弹幕加入时重新计算目标位置 ----
+        if has_new:
+            last_target_y = zone_bottom
+            for dm in reversed(active_danmakus):
+                dm.target_y = last_target_y - dm.height
+                last_target_y = dm.target_y - gap
+                dm.is_locked_to_next = False
+
+        # ---- 阶段 2：阻尼动画更新当前位置 ----
+        for dm in active_danmakus:
+            if dm.is_first_activation:
+                dm.current_y = zone_bottom - dm.height
+                dm.is_first_activation = False
+            else:
+                diff = dm.target_y - dm.current_y
+                if abs(diff) > position_threshold:
+                    dm.current_y += diff * damping
+
+        # ---- 阶段 3：碰撞检测（稳定期跳过） ----
+        if skip_collision or n <= 1:
+            return
+
+        visible_start = 0
+        while visible_start < n:
+            if active_danmakus[visible_start].current_y + active_danmakus[visible_start].height <= zone_top:
+                visible_start += 1
+            else:
+                break
+
+        if n - visible_start <= 1:
+            return
+
+        for i in range(n - 2, visible_start - 1, -1):
+            curr = active_danmakus[i]
+            next_dm = active_danmakus[i + 1]
+
+            if curr.is_locked_to_next:
+                curr.current_y = next_dm.current_y - gap - curr.height
+                continue
+
+            max_bottom = next_dm.current_y - gap
+            curr_bottom = curr.current_y + curr.height
+
+            if curr_bottom > max_bottom:
+                new_y = max_bottom - curr.height
+                curr.current_y = new_y
+                if curr.target_y > new_y:
+                    curr.target_y = new_y
+                    curr.is_locked_to_next = True
+
+
+# =============================================================================
+# 模块级辅助函数
+# =============================================================================
+
+def _all_positions_stable(
+    active_danmakus: list[ActiveDanmaku],
+    threshold: float = 0.5,
+) -> bool:
+    """检查所有弹幕位置是否已稳定（目标位置与当前位置差小于阈值）。"""
+    for dm in active_danmakus:
+        if abs(dm.target_y - dm.current_y) >= threshold:
+            return False
+    return True
