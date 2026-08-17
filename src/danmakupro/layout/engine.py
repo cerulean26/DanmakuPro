@@ -1,0 +1,329 @@
+"""布局引擎
+
+负责弹幕布局计算、位置更新、碰撞检测和弹幕生成。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from loguru import logger
+
+from ..config.models import LayoutStyle, LayoutRatio, AnimationParams, DEFAULT_CONFIG
+
+if TYPE_CHECKING:
+    from ..input.models import DanmakuEvent, ActiveDanmaku
+    from ..render.assets import AssetLoader
+
+from PySide6.QtGui import QImage
+
+from .params import LayoutParams, LayerParams
+
+
+@dataclass
+class LayoutContext:
+    """布局上下文"""
+    animation: AnimationParams = field(default_factory=lambda: DEFAULT_CONFIG.animation)
+    event_idx: int = 0
+    # 上次发射文本弹幕的时间。0.0 表示尚未发射过。
+    last_text_spawn_time: float = 0.0
+    # 上次发射礼物弹幕的时间。0.0 表示尚未发射过。
+    last_gift_spawn_time: float = 0.0
+
+
+class LayoutEngine:
+    """布局引擎"""
+
+    @staticmethod
+    def calculate_params(
+        w: int, h: int,
+        style: LayoutStyle = DEFAULT_CONFIG.style,
+        ratio: LayoutRatio = DEFAULT_CONFIG.ratio,
+    ) -> tuple[LayoutParams, LayerParams]:
+        """计算布局参数"""
+        bottom = int(h * ratio.bottom_ratio)
+        text_h = int(h * ratio.text_h_ratio)
+        text_top = bottom - text_h
+        gift_h = int(h * ratio.gift_h_ratio)
+        gift_top = text_top - gift_h
+        text_w = int(w * ratio.text_w_ratio)
+
+        layout_params = LayoutParams(
+            bottom=bottom,
+            text_h=text_h,
+            text_top=text_top,
+            text_w=text_w,
+            gap=style.bubble_vertical_gap,
+            gift_top=gift_top,
+            gift_h=gift_h,
+        )
+
+        layer_x = style.danmaku_x
+        layer_w = text_w + style.layer_width_extra
+        layer_y = gift_top
+        layer_h = bottom - gift_top
+
+        if layer_x + layer_w > w:
+            layer_w = max(0, w - layer_x)
+
+        layer_params = LayerParams(
+            layer_x=layer_x, layer_y=layer_y,
+            layer_w=layer_w, layer_h=layer_h,
+        )
+
+        return layout_params, layer_params
+
+    @staticmethod
+    def preload_danmaku_objects(
+        events: list['DanmakuEvent'],
+        layout_params: LayoutParams,
+        asset_provider: 'AssetLoader',
+        style: LayoutStyle = DEFAULT_CONFIG.style,
+    ) -> list['ActiveDanmaku']:
+        """预创建弹幕对象（懒加载模式）。
+
+        创建 ActiveDanmaku 对象但不立即渲染，等到首次激活时才调用 pre_render。
+        """
+        from ..input.models import ActiveDanmaku
+
+        logger.info(f"预创建 {len(events)} 个弹幕对象...")
+        pool: list[ActiveDanmaku] = []
+
+        for event in events:
+            dm = ActiveDanmaku(
+                event=event,
+                font_metrics=asset_provider.fm,
+                emoji_cache=asset_provider.emoji_cache,
+                gift_cache=asset_provider.gift_cache,
+                max_content_width=layout_params.text_w,
+                line_height=asset_provider.line_height,
+                style=style,
+            )
+            pool.append(dm)
+
+        return pool
+
+    @staticmethod
+    def spawn_new_danmakus(
+        ctx: LayoutContext,
+        current_time: float,
+        danmaku_pool: list['ActiveDanmaku'],
+        active_text: list['ActiveDanmaku'],
+        active_gift: list['ActiveDanmaku'],
+        asset_provider: 'AssetLoader',
+    ) -> tuple[bool, bool, int, int]:
+        """根据当前时间生成新弹幕。
+
+        无积压时（待处理量 <= batch_size）立即发射，无需等待间隔；
+        有积压时启用时间窗口和批次限制，平滑弹幕密度。
+        Returns:
+            (text_has_new, gift_has_new, text_emitted, gift_emitted)
+        """
+        animation = ctx.animation
+        event_idx = ctx.event_idx
+
+        # 扫描积压弹幕，同时按类型统计待处理数量
+        pending_end = event_idx
+        pending_text = 0
+        pending_gift = 0
+        for i in range(event_idx, len(danmaku_pool)):
+            if danmaku_pool[i].event.time > current_time:
+                break
+            if danmaku_pool[i].event.is_gift:
+                pending_gift += 1
+            else:
+                pending_text += 1
+            pending_end = i + 1
+
+        # 动态间隔：无积压时立即发射，有积压时检查间隔
+        # last_*_spawn_time == 0.0 表示尚未发射过，免间隔检查避免初始延迟
+        text_can = (
+            pending_text <= animation.text_spawn_batch_size
+            or ctx.last_text_spawn_time == 0.0
+            or (current_time - ctx.last_text_spawn_time) >= animation.text_spawn_interval
+        )
+        gift_can = (
+            pending_gift <= animation.gift_spawn_batch_size
+            or ctx.last_gift_spawn_time == 0.0
+            or (current_time - ctx.last_gift_spawn_time) >= animation.gift_spawn_interval
+        )
+
+        if not text_can and not gift_can:
+            return False, False, 0, 0
+
+        text_emitted = 0
+        gift_emitted = 0
+        # 生成新弹幕
+        # 注意：当某类弹幕不能发射时（间隔未到或批次已满），
+        # 必须 break 停止扫描，而不是 continue 跳过。
+        # 因为 event_idx 是顺序推进的，跳过会导致该弹幕永久丢失。
+        while event_idx < pending_end:
+            dm = danmaku_pool[event_idx]
+            is_gift = dm.event.is_gift
+
+            if is_gift:
+                if not gift_can or gift_emitted >= animation.gift_spawn_batch_size:
+                    break
+                gift_emitted += 1
+            else:
+                if not text_can or text_emitted >= animation.text_spawn_batch_size:
+                    break
+                text_emitted += 1
+
+            # 首次激活时预渲染缓存图片
+            if dm.cached_image is None:
+                dm.pre_render(
+                    asset_provider.font,
+                    asset_provider.emoji_cache,
+                    asset_provider.gift_cache,
+                    asset_provider.bg_color,
+                )
+
+            # 记录生成时间（用于礼物停留计时）
+            if dm.spawn_time == 0.0:
+                dm.spawn_time = current_time
+
+            if is_gift:
+                active_gift.append(dm)
+            else:
+                active_text.append(dm)
+            event_idx += 1
+
+        ctx.event_idx = event_idx
+        if text_emitted > 0:
+            ctx.last_text_spawn_time = current_time
+        if gift_emitted > 0:
+            ctx.last_gift_spawn_time = current_time
+
+        return text_emitted > 0, gift_emitted > 0, text_emitted, gift_emitted
+
+    @staticmethod
+    def update_positions(
+        active_danmakus: list['ActiveDanmaku'],
+        is_any_new_spawned: bool,
+        zone_bottom: int,
+        gap: int,
+        damping: float = 0.25,
+        position_threshold: float = 0.1,
+    ) -> None:
+        """更新所有活跃弹幕的位置。
+
+        两大职责：
+            1. 新弹幕加入时，重新计算所有弹幕的目标位置（从下往上排列）
+            2. 每帧对所有弹幕应用平滑阻尼动画（damping），实现丝滑移动
+        """
+        if is_any_new_spawned and active_danmakus:
+            last_target_y = zone_bottom
+            for dm in reversed(active_danmakus):
+                h = dm.height
+                dm.target_y = last_target_y - h
+                last_target_y = dm.target_y - gap
+                dm.is_locked_to_next = False
+
+        for dm in active_danmakus:
+            if dm.is_first_activation:
+                dm.current_y = zone_bottom - dm.height
+                dm.is_first_activation = False
+            ty = dm.target_y
+            cy = dm.current_y
+            diff = ty - cy
+            if abs(diff) > position_threshold:
+                dm.current_y = cy + diff * damping
+
+    @staticmethod
+    def handle_collisions(
+        active_danmakus: list['ActiveDanmaku'],
+        zone_top: int,
+        gap: int,
+    ) -> None:
+        """碰撞检测与处理：确保所有弹幕在物理上不重叠。
+
+        从下往上遍历可见弹幕，检查每对相邻弹幕是否重叠。如果重叠，
+        将上方的弹幕向上推挤。使用锁定机制防止弹幕在碰撞边界来回抖动。
+        """
+        n = len(active_danmakus)
+        if n <= 1:
+            return
+
+        # 跳过已经完全越界的弹幕
+        visible_start = 0
+        while visible_start < n:
+            dm = active_danmakus[visible_start]
+            if dm.current_y + dm.height <= zone_top:
+                visible_start += 1
+            else:
+                break
+
+        visible_count = n - visible_start
+        if visible_count <= 1:
+            return
+
+        for i in range(n - 2, visible_start - 1, -1):
+            curr_dm = active_danmakus[i]
+            next_dm = active_danmakus[i + 1]
+
+            if curr_dm.is_locked_to_next:
+                curr_dm.current_y = next_dm.current_y - gap - curr_dm.height
+                continue
+
+            max_physical_bottom = next_dm.current_y - gap
+            curr_bottom = curr_dm.current_y + curr_dm.height
+
+            if curr_bottom > max_physical_bottom:
+                new_y = max_physical_bottom - curr_dm.height
+                curr_dm.current_y = new_y
+                if curr_dm.target_y > new_y:
+                    curr_dm.target_y = new_y
+                    curr_dm.is_locked_to_next = True
+
+    @staticmethod
+    def recycle_out_of_bounds(
+        active_danmakus: list['ActiveDanmaku'],
+        zone_top: int,
+        current_time: float | None = None,
+        dwell_time: float | None = None,
+    ) -> None:
+        """回收超出屏幕范围的弹幕，释放缓存图片以控制内存。"""
+        remaining: list['ActiveDanmaku'] = []
+        for dm in active_danmakus:
+            out = dm.is_out_of_bounds(zone_top)
+            expired = (
+                dwell_time is not None
+                and current_time is not None
+                and (current_time - dm.spawn_time) > dwell_time
+            )
+            if out or expired:
+                dm.cached_image = QImage()  # 显式触发 C++ 析构，立即释放像素缓冲区
+            else:
+                remaining.append(dm)
+        active_danmakus[:] = remaining
+
+    @staticmethod
+    def update_danmaku_layer(
+        active_danmakus: list['ActiveDanmaku'],
+        has_new: bool,
+        zone_bottom: int,
+        zone_top: int,
+        gap: int,
+        damping: float,
+        current_time: float | None = None,
+        dwell_time: float | None = None,
+    ) -> None:
+        """更新单层弹幕：位置更新、越界回收、碰撞处理。
+
+        将文本弹幕和礼物弹幕的共同处理逻辑提取为统一接口。
+
+        Args:
+            active_danmakus: 活跃弹幕列表
+            has_new: 是否有新弹幕加入
+            zone_bottom: 区域底部边界
+            zone_top: 区域顶部边界（越界判断）
+            gap: 弹幕间距
+            damping: 阻尼系数
+            current_time: 当前时间（礼物停留计时用，可选）
+            dwell_time: 停留时间（礼物用，可选）
+        """
+        LayoutEngine.update_positions(active_danmakus, has_new, zone_bottom, gap, damping)
+        LayoutEngine.recycle_out_of_bounds(active_danmakus, zone_top, current_time, dwell_time)
+        LayoutEngine.handle_collisions(active_danmakus, zone_top, gap)

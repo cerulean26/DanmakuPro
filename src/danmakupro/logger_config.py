@@ -1,6 +1,6 @@
 """日志配置模块
 
-统一管理 loguru 日志的初始化配置，供 CLI 和 GUI 入口共用。
+统一管理 loguru 日志的初始化配置，供 CLI 入口共用。
 """
 
 import sys

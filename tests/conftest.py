@@ -5,22 +5,50 @@
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from PySide6.QtGui import QGuiApplication, QFont, QFontMetrics, QImage
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication, QFont, QFontMetrics, QImage, QColor
 
-from danmakupro.config import EMOJI_PATTERN, FONT_SIZE
-from danmakupro.parser import parse_xml
+from danmakupro.config import DEFAULT_CONFIG
+from danmakupro.utils import extract_emoji_names
+
+style = DEFAULT_CONFIG.style
+from danmakupro.render.assets import load_image_assets
+from danmakupro.input.parser import parse_xml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-_DEFAULT_XML = _PROJECT_ROOT / "source" / "2026-06-20 16-00-05-993 放黑豹.xml"
+_DEFAULT_XML = _PROJECT_ROOT / "source" / "test.xml"
 _EMOJI_DIR = _PROJECT_ROOT / "assets" / "emoji"
 _GIFT_DIR = _PROJECT_ROOT / "assets" / "gift"
 
 LINE_HEIGHT = 36
+FONT_SIZE = style.font_size
+
+
+@dataclass
+class MockAssetLoader:
+    """模拟 AssetLoader，提供测试所需的字体、缓存和度量信息。"""
+    font: QFont
+    fm: QFontMetrics
+    line_height: int
+    emoji_cache: dict
+    gift_cache: dict
+    bg_color: QColor
+
+
+@pytest.fixture
+def asset_loader(font, font_metrics, emoji_cache, gift_cache):
+    return MockAssetLoader(
+        font=font,
+        fm=font_metrics,
+        line_height=LINE_HEIGHT,
+        emoji_cache=emoji_cache,
+        gift_cache=gift_cache,
+        bg_color=QColor(20, 20, 20, 150),
+    )
 
 
 def pytest_addoption(parser):
@@ -63,14 +91,8 @@ def font_metrics(font):
 def emoji_cache(qapp):
     cache: dict[str, QImage] = {}
     if _EMOJI_DIR.exists():
-        for png in _EMOJI_DIR.glob("*.png"):
-            img = QImage(str(png))
-            if not img.isNull():
-                cache[png.stem] = img.scaled(
-                    LINE_HEIGHT, LINE_HEIGHT,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+        names = {p.stem for p in _EMOJI_DIR.glob("*.png")}
+        load_image_assets(_EMOJI_DIR, names, LINE_HEIGHT, cache, "emoji")
     return cache
 
 
@@ -78,14 +100,8 @@ def emoji_cache(qapp):
 def gift_cache(qapp):
     cache: dict[str, QImage] = {}
     if _GIFT_DIR.exists():
-        for png in _GIFT_DIR.glob("*.png"):
-            img = QImage(str(png))
-            if not img.isNull():
-                cache[png.stem] = img.scaled(
-                    LINE_HEIGHT, LINE_HEIGHT,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+        names = {p.stem for p in _GIFT_DIR.glob("*.png")}
+        load_image_assets(_GIFT_DIR, names, LINE_HEIGHT, cache, "gift")
     return cache
 
 
@@ -104,7 +120,7 @@ def xml_path(request):
 
 @pytest.fixture(scope="session")
 def events(xml_path):
-    return parse_xml(str(xml_path))
+    return parse_xml(str(xml_path), min_gift_price=0.0)
 
 
 @pytest.fixture(scope="session")
@@ -112,8 +128,8 @@ def emoji_names(events):
     names: set[str] = set()
     for e in events:
         if not e.is_gift and e.text:
-            for match in EMOJI_PATTERN.finditer(e.text):
-                names.add(match.group(1))
+            for name in extract_emoji_names(e.text):
+                names.add(name)
     return names
 
 

@@ -138,7 +138,7 @@ class TestXmlFileIntegrity:
 # 资产加载器集成测试
 class TestAssetLoaderIntegration:
     def test_asset_loader_loads_xml_resources(self, qapp, events):
-        from danmakupro.asset_loader import AssetLoader
+        from danmakupro.render.assets import AssetLoader
 
         assert len(events) > 0, "parse_xml 未返回任何事件"
 

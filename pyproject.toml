@@ -8,15 +8,16 @@ dependencies = [
     "loguru>=0.7.3",
     "lxml>=6.1.1",
     "pyside6>=6.11.1",
+    "pyyaml>=6.0",
     "tqdm>=4.67.3",
 ]
 
 [project.scripts]
 danmakupro = "danmakupro.cli:main"
-danmakupro-gui = "danmakupro.gui:main"
 
 [tool.pyright]
 extraPaths = ["src"]
+typeCheckingMode = "basic"
 
 [build-system]
 requires = ["hatchling"]
@@ -57,6 +58,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.411",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.14",
