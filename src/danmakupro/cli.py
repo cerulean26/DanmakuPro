@@ -46,11 +46,10 @@ def main() -> None:
         help="强制覆盖已存在的输出文件",
     )
     args = parser.parse_args()
-
     configure_logger()
     ensure_qt_app()
     config = load_config(args.config)
-
+    # 捕获创建Burner时的异常，避免程序崩溃
     try:
         burner = DanmakuBurner(
             video_in=args.video, xml_in=args.xml,
@@ -61,23 +60,17 @@ def main() -> None:
         logger.error(f"[{e.category.value}] {e}")
         return
     except Exception as e:
-        try:
-            handle_error(e, component="cli", operation="create_burner")
-        except Exception:
-            logger.error(f"无法继续: {e}")
+        handle_error(e, component="cli", operation="create_burner")
         return
-
     logger.info(f"开始处理: {args.video}")
+    # 捕获处理Burner时的异常，避免程序崩溃
     try:
         burner.run()
     except DanmakuProError as e:
         logger.error(f"压制失败 [{e.category.value}]: {e}")
         raise SystemExit(1)
     except Exception as e:
-        try:
-            handle_error(e, component="cli", operation="run")
-        except Exception:
-            logger.error(f"压制失败: {e}")
+        handle_error(e, component="cli", operation="run")
         raise SystemExit(1)
     finally:
         app = QApplication.instance()

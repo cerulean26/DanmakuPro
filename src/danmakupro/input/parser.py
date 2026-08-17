@@ -25,7 +25,6 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
         XML 中 gift 的 price 属性单位为厘（1元=1000厘），
         解析时自动转换为元。
     """
-    logger.info(f"正在解析 XML: {xml_path}")
     events: list[DanmakuEvent] = []
 
     for _event, elem in etree.iterparse(
@@ -62,5 +61,4 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
         elem.clear()
 
     events.sort(key=lambda e: e.time)
-    logger.info(f"XML 解析完成: {len(events)} 个事件")
     return events
