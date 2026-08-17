@@ -1,6 +1,6 @@
-"""统一错误处理策略
+"""统一错误处理
 
-定义项目中的错误类型、恢复策略和错误处理器。
+定义项目中的错误类型和错误处理器。所有错误均终止任务。
 """
 
 from __future__ import annotations
@@ -28,19 +28,6 @@ class ErrorCategory(enum.Enum):
 
 
 # =============================================================================
-# 恢复策略
-# =============================================================================
-
-class RecoveryAction(enum.Enum):
-    """错误恢复策略"""
-    RETRY = "retry"
-    SKIP = "skip"
-    RESTART = "restart"
-    ABORT = "abort"
-    IGNORE = "ignore"
-
-
-# =============================================================================
 # 错误上下文
 # =============================================================================
 
@@ -65,70 +52,41 @@ class DanmakuProError(Exception):
         self,
         message: str,
         category: ErrorCategory = ErrorCategory.UNKNOWN,
-        recovery: RecoveryAction = RecoveryAction.ABORT,
         context: ErrorContext | None = None,
     ):
         super().__init__(message)
         self.category = category
-        self.recovery = recovery
         self.context = context or ErrorContext()
 
 
 class InputError(DanmakuProError):
     """输入错误"""
     def __init__(self, message: str, context: ErrorContext | None = None):
-        super().__init__(
-            message, category=ErrorCategory.INPUT,
-            recovery=RecoveryAction.ABORT, context=context,
-        )
+        super().__init__(message, category=ErrorCategory.INPUT, context=context)
 
 
 class ConfigError(DanmakuProError):
     """配置错误"""
     def __init__(self, message: str, context: ErrorContext | None = None):
-        super().__init__(
-            message, category=ErrorCategory.CONFIG,
-            recovery=RecoveryAction.ABORT, context=context,
-        )
+        super().__init__(message, category=ErrorCategory.CONFIG, context=context)
 
 
 class RenderError(DanmakuProError):
     """渲染错误"""
-    def __init__(
-        self, message: str,
-        recovery: RecoveryAction = RecoveryAction.SKIP,
-        context: ErrorContext | None = None,
-    ):
-        super().__init__(
-            message, category=ErrorCategory.RENDER,
-            recovery=recovery, context=context,
-        )
+    def __init__(self, message: str, context: ErrorContext | None = None):
+        super().__init__(message, category=ErrorCategory.RENDER, context=context)
 
 
 class EncodeError(DanmakuProError):
     """编码错误"""
-    def __init__(
-        self, message: str,
-        recovery: RecoveryAction = RecoveryAction.RESTART,
-        context: ErrorContext | None = None,
-    ):
-        super().__init__(
-            message, category=ErrorCategory.ENCODE,
-            recovery=recovery, context=context,
-        )
+    def __init__(self, message: str, context: ErrorContext | None = None):
+        super().__init__(message, category=ErrorCategory.ENCODE, context=context)
 
 
 class ResourceError(DanmakuProError):
     """资源错误"""
-    def __init__(
-        self, message: str,
-        recovery: RecoveryAction = RecoveryAction.SKIP,
-        context: ErrorContext | None = None,
-    ):
-        super().__init__(
-            message, category=ErrorCategory.RESOURCE,
-            recovery=recovery, context=context,
-        )
+    def __init__(self, message: str, context: ErrorContext | None = None):
+        super().__init__(message, category=ErrorCategory.RESOURCE, context=context)
 
 
 # =============================================================================
@@ -138,26 +96,22 @@ class ResourceError(DanmakuProError):
 class ErrorHandler:
     """统一错误处理器"""
 
-    _stats: dict[ErrorCategory, int] = {}
-
     @classmethod
     def handle(
-        cls, error: Exception,
+        cls,
+        error: Exception,
         context: ErrorContext | None = None,
         log_level: str = "error",
-    ) -> RecoveryAction:
-        """处理错误，返回恢复策略"""
+    ) -> None:
+        """记录错误并抛出，终止当前任务。"""
         context = context or ErrorContext()
 
         if isinstance(error, DanmakuProError):
             category = error.category
-            recovery = error.recovery
             message = str(error)
         else:
-            category, recovery = cls._classify_error(error)
+            category = cls._classify_error(error)
             message = f"[{category.value}] {str(error)}"
-
-        cls._stats[category] = cls._stats.get(category, 0) + 1
 
         log_func = getattr(logger, log_level)
         log_func(
@@ -168,20 +122,20 @@ class ErrorHandler:
         if context.details:
             logger.debug(f"错误详情: {context.details}")
 
-        return recovery
+        raise error
 
     @classmethod
-    def _classify_error(cls, error: Exception) -> tuple[ErrorCategory, RecoveryAction]:
+    def _classify_error(cls, error: Exception) -> ErrorCategory:
         """根据异常类型分类"""
         if isinstance(error, (FileNotFoundError, IsADirectoryError, ValueError)):
-            return ErrorCategory.INPUT, RecoveryAction.ABORT
+            return ErrorCategory.INPUT
         if isinstance(error, (BrokenPipeError, OSError)):
-            return ErrorCategory.ENCODE, RecoveryAction.RESTART
+            return ErrorCategory.ENCODE
         if isinstance(error, (MemoryError, PermissionError)):
-            return ErrorCategory.SYSTEM, RecoveryAction.ABORT
+            return ErrorCategory.SYSTEM
         if isinstance(error, RuntimeError):
-            return ErrorCategory.RENDER, RecoveryAction.SKIP
-        return ErrorCategory.UNKNOWN, RecoveryAction.ABORT
+            return ErrorCategory.RENDER
+        return ErrorCategory.UNKNOWN
 
 
 # =============================================================================
@@ -194,11 +148,12 @@ def handle_error(
     operation: str | None = None,
     frame_idx: int | None = None,
     **details: Any,
-) -> RecoveryAction:
-    """便捷的错误处理函数"""
+) -> None:
+    """记录错误并抛出，终止当前任务。"""
     context = ErrorContext(
-        component=component, operation=operation,
+        component=component,
+        operation=operation,
         frame_idx=frame_idx,
         details=details if details else None,
     )
-    return ErrorHandler.handle(error, context)
+    ErrorHandler.handle(error, context)

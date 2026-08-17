@@ -56,31 +56,29 @@ class DanmakuRenderer:
         for dm in active_danmakus:
             cy = dm.current_y
 
-            if dm.event.is_gift:
-                limit = layout_params.gift_top
-                threshold = layout_params.gift_top + fade_out_zone
-            else:
+            alpha = 1.0
+            if not dm.event.is_gift:
                 limit = layout_params.text_top
                 threshold = layout_params.text_top + fade_out_zone
 
-            alpha = 1.0
-            if cy < threshold:
-                if cy <= limit:
-                    continue
-                else:
-                    alpha = (cy - limit) / fade_out_zone
-                    alpha = max(0.0, min(1.0, alpha))
+                if cy < threshold:
+                    if cy <= limit:
+                        continue
+                    else:
+                        alpha = (cy - limit) / fade_out_zone
+                        alpha = max(0.0, min(1.0, alpha))
             self.painter.setOpacity(alpha)
             local_x = dm.x - self._layer_params.layer_x
             local_y = int(dm.current_y) - layer_y
             dm.render(self.painter, int(local_x), local_y)
 
-    def get_frame_data(self) -> memoryview:
-        """获取当前画布的原始像素数据。
+    def get_frame_data(self) -> bytes:
+        """获取当前画布的原始像素数据（拷贝，生命周期安全）。
+
         Returns:
-            画布像素数据的 memoryview
+            画布像素数据的 bytes 副本
         """
-        return memoryview(self.canvas.bits())
+        return bytes(self.canvas.bits())
 
     def end(self) -> None:
         """结束绘制，释放 QPainter 资源。"""

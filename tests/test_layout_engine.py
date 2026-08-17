@@ -13,6 +13,7 @@ from danmakupro.input.models import DanmakuEvent, ActiveDanmaku
 from danmakupro.config import DEFAULT_CONFIG
 
 MAX_CONTENT_WIDTH = 800
+LINE_HEIGHT = 36  # 与 conftest.py 保持一致，QFontMetrics.height() 实测值
 
 
 # =============================================================================
@@ -45,15 +46,19 @@ def _make_active_danmaku(
     )
 
 
-def _make_layout_params(w: int = 1920, h: int = 1080) -> LayoutParams:
+def _make_layout_params(
+    w: int = 1920, h: int = 1080, line_height: int = LINE_HEIGHT,
+) -> LayoutParams:
     """使用与 calculate_params 相同的公式创建 LayoutParams。"""
     cfg = DEFAULT_CONFIG
-    bottom = int(h * cfg.ratio.bottom_ratio)
-    text_h = int(h * cfg.ratio.text_h_ratio)
+    bubble_height = 2 * cfg.style.bubble_padding_y + line_height
+    row_height = bubble_height + cfg.style.bubble_vertical_gap
+    text_h = cfg.ratio.max_text_rows * row_height
+    gift_h = cfg.ratio.max_gift_rows * row_height
+    bottom = h - cfg.ratio.bottom_margin
     text_top = bottom - text_h
-    gift_h = int(h * cfg.ratio.gift_h_ratio)
     gift_top = text_top - gift_h
-    text_w = int(w * cfg.ratio.text_w_ratio)
+    text_w = int(w * cfg.ratio.text_width_ratio)
     return LayoutParams(
         bottom=bottom,
         text_h=text_h,
@@ -74,22 +79,24 @@ class TestCalculateParams:
     """测试 calculate_params：布局参数和渲染层参数计算。"""
 
     def test_1080p(self):
-        lp, layer = LayoutEngine.calculate_params(1920, 1080)
+        lp, layer = LayoutEngine.calculate_params(1920, 1080, line_height=LINE_HEIGHT)
         cfg = DEFAULT_CONFIG
-        assert lp.bottom == int(1080 * cfg.ratio.bottom_ratio)
-        assert lp.text_h == int(1080 * cfg.ratio.text_h_ratio)
-        assert lp.text_w == int(1920 * cfg.ratio.text_w_ratio)
+        bubble_height = 2 * cfg.style.bubble_padding_y + LINE_HEIGHT
+        row_height = bubble_height + cfg.style.bubble_vertical_gap
+        assert lp.bottom == 1080 - cfg.ratio.bottom_margin
+        assert lp.text_h == cfg.ratio.max_text_rows * row_height
+        assert lp.text_w == int(1920 * cfg.ratio.text_width_ratio)
         assert lp.text_top == lp.bottom - lp.text_h
         assert lp.gap == cfg.style.bubble_vertical_gap
 
     def test_720p(self):
-        lp, layer = LayoutEngine.calculate_params(1280, 720)
+        lp, layer = LayoutEngine.calculate_params(1280, 720, line_height=LINE_HEIGHT)
         cfg = DEFAULT_CONFIG
-        assert lp.bottom == int(720 * cfg.ratio.bottom_ratio)
-        assert lp.text_w == int(1280 * cfg.ratio.text_w_ratio)
+        assert lp.bottom == 720 - cfg.ratio.bottom_margin
+        assert lp.text_w == int(1280 * cfg.ratio.text_width_ratio)
 
     def test_layer_params(self):
-        lp, layer = LayoutEngine.calculate_params(1920, 1080)
+        lp, layer = LayoutEngine.calculate_params(1920, 1080, line_height=LINE_HEIGHT)
         style = DEFAULT_CONFIG.style
         assert layer.layer_x == style.danmaku_x
         assert layer.layer_y == lp.gift_top
@@ -100,17 +107,17 @@ class TestCalculateParams:
     def test_layer_width_clamped(self):
         style = DEFAULT_CONFIG.style
         tiny_w = style.danmaku_x + 10
-        lp, layer = LayoutEngine.calculate_params(tiny_w, 1080)
+        lp, layer = LayoutEngine.calculate_params(tiny_w, 1080, line_height=LINE_HEIGHT)
         assert layer.layer_w <= tiny_w - style.danmaku_x
 
     def test_params_frozen(self):
-        lp, layer = LayoutEngine.calculate_params(1920, 1080)
+        lp, layer = LayoutEngine.calculate_params(1920, 1080, line_height=LINE_HEIGHT)
         with pytest.raises(AttributeError):
             setattr(lp, "bottom", 0)
 
     def test_gift_zone_layout(self):
         """验证礼物区在文本区上方。"""
-        lp, layer = LayoutEngine.calculate_params(1920, 1080)
+        lp, layer = LayoutEngine.calculate_params(1920, 1080, line_height=LINE_HEIGHT)
         assert lp.gift_top < lp.text_top
         assert lp.gift_h > 0
         assert lp.gift_top + lp.gift_h == lp.text_top

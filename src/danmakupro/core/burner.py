@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from ..config.models import DanmakuConfig, DEFAULT_CONFIG, EncodeMode
 from ..errors import (
-    RecoveryAction, EncodeError, DanmakuProError, handle_error,
+    EncodeError, DanmakuProError, handle_error,
 )
 from ..input.parser import parse_xml
 from ..layout.engine import LayoutEngine, LayoutContext
@@ -24,6 +24,33 @@ from ..encode.ffmpeg import FFmpegManager
 from ..utils.validation import validate_video_input, validate_xml_input, validate_output_path
 
 
+
+
+class StepTracker:
+    """步骤计数器：自动递增 + 格式化日志，消除手动 step+=1 和魔法数字 total_steps。"""
+
+    def __init__(self):
+        self._steps: list[str] = []
+        self._current = 0
+
+    def add(self, description: str) -> None:
+        self._steps.append(description)
+
+    def next(self) -> None:
+        self._current += 1
+        logger.info(f"[{self._current}/{len(self._steps)}] {self._steps[self._current - 1]}")
+
+    def info(self, message: str) -> None:
+        """输出与当前步骤关联的附加信息。"""
+        logger.info(f"[{self._current}/{len(self._steps)}] {message}")
+
+    @property
+    def current(self) -> int:
+        return self._current
+
+    @property
+    def total(self) -> int:
+        return len(self._steps)
 
 
 class DanmakuBurner:
@@ -71,15 +98,15 @@ class DanmakuBurner:
     def run(self) -> None:
         """执行完整的弹幕压制流程。
 
-        按顺序执行 8 个步骤：
-        1. 解析弹幕 XML — 将 Bilibili 弹幕 XML 解析为事件列表
-        2. 加载资源文件 — 预加载字体、Emoji 和礼物图片
-        3. 获取视频元数据 — 读取分辨率、帧率、总帧数
-        4. 计算布局参数 — 根据视频尺寸计算弹幕显示区域
-        5. 预创建弹幕对象 — 构建弹幕气泡并缓存渲染结果
-        6. 构建 FFmpeg 编码命令 — 根据编码模式和参数生成命令
-        7. 启动 FFmpeg 编码器 — 启动子进程，建立管道
-        8. 压制渲染 — 逐帧发射弹幕、渲染、编码输出
+        按顺序执行 8 个步骤，步骤列表由 StepTracker 集中管理：
+        1. 解析弹幕 XML
+        2. 加载资源文件
+        3. 获取视频元数据
+        4. 计算布局参数
+        5. 预创建弹幕对象
+        6. 构建 FFmpeg 编码命令
+        7. 启动 FFmpeg 编码器
+        8. 压制渲染
 
         KeyboardInterrupt 会被捕获并输出警告，其他异常按策略处理。
         无论成功或失败，finally 块都会执行资源清理。
@@ -92,55 +119,62 @@ class DanmakuBurner:
         style = cfg.style
         syscfg = cfg.system
 
-        total_steps = 8
+        tracker = StepTracker()
+        tracker.add("解析弹幕 XML")
+        tracker.add("加载资源文件")
+        tracker.add("获取视频元数据")
+        tracker.add("计算布局参数")
+        tracker.add("预创建弹幕对象")
+        tracker.add("构建 FFmpeg 编码命令")
+        tracker.add("启动 FFmpeg 编码器")
+        tracker.add("压制渲染")
 
-        step = 0
-        step += 1; logger.info(f"[{step}/{total_steps}] 解析弹幕 XML")
+        tracker.next()
         events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 加载资源文件")
+        tracker.next()
         self._asset_provider.load_assets(events)
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 获取视频元数据")
+        tracker.next()
         v_info = self._frame_encoder.get_video_info()
         raw_w: int = int(v_info['w'])
         raw_h: int = int(v_info['h'])
         fps: float = float(v_info['fps'])
         total_frames: int = int(v_info['frames'])
 
-        align = syscfg.h264_alignment
+        align = syscfg.video_alignment
         w = int(((raw_w + align - 1) // align) * align)
         h = int(((raw_h + align - 1) // align) * align)
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 计算布局参数")
-        layout_params, layer_params = LayoutEngine.calculate_params(w, h, style, cfg.ratio)
+        tracker.next()
+        layout_params, layer_params = LayoutEngine.calculate_params(
+            w, h, style, cfg.ratio, self._asset_provider.line_height,
+        )
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 预创建弹幕对象")
+        tracker.next()
         danmaku_pool = LayoutEngine.preload_danmaku_objects(
             events, layout_params, self._asset_provider, style,
         )
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 构建 FFmpeg 编码命令")
+        tracker.next()
         ffmpeg_cmd = self._frame_encoder.build_command(fps, w, h, layer_params)
 
-        step += 1; logger.info(f"[{step}/{total_steps}] 启动 FFmpeg 编码器")
+        tracker.next()
         try:
             self._frame_encoder.start(ffmpeg_cmd)
             # 刷新异步日志队列，避免与 tqdm 进度条输出交叠
             logger.complete()
             self._render_loop(
                 fps, total_frames, danmaku_pool,
-                layout_params, layer_params, step, total_steps,
+                layout_params, layer_params, tracker,
             )
         except KeyboardInterrupt:
             logger.warning("用户中断压制")
         except DanmakuProError:
             raise
         except Exception as e:
-            recovery = handle_error(e, component="burner", operation="run")
-            if recovery == RecoveryAction.ABORT:
-                raise RuntimeError(f"压制失败: {e}") from e
-            raise
+            handle_error(e, component="burner", operation="run")
+            raise RuntimeError(f"压制失败: {e}") from e
         finally:
             logger.info("清理资源")
             self._frame_encoder.cleanup()
@@ -169,15 +203,10 @@ class DanmakuBurner:
             frame_encoder.submit_frame(renderer.get_frame_data())
             pbar.update(1)
         except (BrokenPipeError, OSError, RuntimeError) as e:
-            recovery = handle_error(
+            handle_error(
                 e, component="burner", operation="submit_frame", frame_idx=frame_idx,
             )
-            if recovery == RecoveryAction.ABORT:
-                raise EncodeError(f"编码器错误: {e}") from e
-            elif recovery == RecoveryAction.SKIP:
-                logger.warning(f"[{frame_idx:>6}/{total_frames}] 跳过帧")
-            else:
-                raise
+            raise EncodeError(f"编码器错误: {e}") from e
 
     def _render_loop(
         self,
@@ -186,8 +215,7 @@ class DanmakuBurner:
         danmaku_pool: list[Any],
         layout_params: LayoutParams,
         layer_params: LayerParams,
-        step: int,
-        total_steps: int,
+        tracker: StepTracker,
     ) -> None:
         """渲染主循环（单线程）
         Args:
@@ -196,8 +224,7 @@ class DanmakuBurner:
             danmaku_pool: 弹幕对象池
             layout_params: 布局参数
             layer_params: 层参数
-            step: 当前步骤序号
-            total_steps: 总步骤数
+            tracker: 步骤计数器
         Raises:
             DanmakuProError: 弹幕压制过程中发生错误
         """
@@ -215,8 +242,8 @@ class DanmakuBurner:
         total_text_danmaku = sum(1 for d in danmaku_pool if not d.event.is_gift)
         total_gift_danmaku = total_danmaku - total_text_danmaku
 
-        step += 1; logger.info(
-            f"[{step}/{total_steps}] 压制渲染 | "
+        tracker.info(
+            f"压制渲染 | "
             f"弹幕池: 共 {total_danmaku} 条 (文本 {total_text_danmaku} + 礼物 {total_gift_danmaku}), "
             f"视频 {total_frames} 帧 @ {fps:.1f}fps"
         )
