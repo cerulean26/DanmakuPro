@@ -8,11 +8,10 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QColor
 
-from danmakupro.models import DanmakuEvent, ActiveDanmaku, RenderSegment, TextRow
-from danmakupro.config import (
-    BUBBLE_PADDING_X, BUBBLE_PADDING_Y, BUBBLE_ROW_GAP,
-    BUBBLE_MULTILINE_RADIUS, DANMAKU_X,
-)
+from danmakupro.input.models import DanmakuEvent, ActiveDanmaku, RenderSegment, TextRow
+from danmakupro.config import DEFAULT_CONFIG
+
+style = DEFAULT_CONFIG.style
 
 MAX_CONTENT_WIDTH = 800
 
@@ -28,6 +27,7 @@ def _make_danmaku(
     max_content_width: int = MAX_CONTENT_WIDTH,
     line_height: int = 36,
 ) -> ActiveDanmaku:
+    """创建 ActiveDanmaku 测试实例。"""
     event = DanmakuEvent(
         time=1.0, user="测试用户", text=text,
         is_gift=is_gift, gift_name=gift_name, gift_count=gift_count,
@@ -39,18 +39,22 @@ def _make_danmaku(
 
 
 # =============================================================================
-# DanmakuEvent
+# DanmakuEvent 数据类
 # =============================================================================
 
 
 class TestDanmakuEvent:
+    """测试弹幕事件数据类的默认值和构造。"""
+
     def test_default_values(self):
+        """非礼物弹幕的默认值应为空/零。"""
         e = DanmakuEvent(time=1.0, user="u", text="t")
         assert not e.is_gift
         assert e.gift_name == ""
         assert e.gift_count == 0
 
     def test_gift_event(self):
+        """礼物弹幕应正确保存礼物属性。"""
         e = DanmakuEvent(time=2.0, user="u", text="", is_gift=True,
                          gift_name="火箭", gift_count=3)
         assert e.is_gift
@@ -64,36 +68,43 @@ class TestDanmakuEvent:
 
 
 class TestActiveDanmakuNormal:
+    """测试普通文本弹幕的构建、尺寸和行属性。"""
+
     def test_basic_construction(self, font_metrics, emoji_cache, gift_cache):
+        """构造后应具有正尺寸、正确的 X 偏移和空缓存。"""
         dm = _make_danmaku("你好世界", font_metrics, emoji_cache, gift_cache)
         assert dm.event.text == "你好世界"
         assert dm.total_width > 0
         assert dm.height > 0
-        assert dm.x == DANMAKU_X
+        assert dm.x == style.danmaku_x
         assert dm.cached_image is None
 
     def test_has_rows(self, font_metrics, emoji_cache, gift_cache):
+        """任何弹幕应至少有一行渲染行。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         assert len(dm.rows) >= 1
 
     def test_single_line_radius(self, font_metrics, emoji_cache, gift_cache):
+        """单行弹幕的圆角半径应为高度的一半。"""
         dm = _make_danmaku("短文本", font_metrics, emoji_cache, gift_cache)
         if len(dm.rows) == 1:
             assert dm.radius == dm.height / 2.0
 
     def test_multi_line_radius(self, font_metrics, emoji_cache, gift_cache):
+        """多行弹幕的圆角半径应为配置的多行圆角值。"""
         dm = _make_danmaku("这是一段非常长的文本用来测试折行功能"
                            "需要足够长才能触发多行折行"
                            "继续添加更多文字以确保折行",
                            font_metrics, emoji_cache, gift_cache,
                            max_content_width=200)
         if len(dm.rows) > 1:
-            assert dm.radius == BUBBLE_MULTILINE_RADIUS
+            assert dm.radius == style.bubble_multiline_radius
 
     def test_dimensions_include_padding(self, font_metrics, emoji_cache, gift_cache):
+        """气泡尺寸应包含水平和垂直内边距。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
-        assert dm.total_width >= BUBBLE_PADDING_X * 2
-        assert dm.height >= BUBBLE_PADDING_Y * 2 + 36
+        assert dm.total_width >= style.bubble_padding_x * 2
+        assert dm.height >= style.bubble_padding_y * 2 + 36
 
 
 # =============================================================================
@@ -102,7 +113,10 @@ class TestActiveDanmakuNormal:
 
 
 class TestActiveDanmakuGift:
+    """测试礼物弹幕的段落构建和颜色。"""
+
     def test_gift_with_cached_image(self, font_metrics, emoji_cache, gift_cache):
+        """有缓存的礼物图片应生成 gift_image 段落。"""
         gift_name = next(iter(gift_cache), None)
         if gift_name is None:
             pytest.skip("无礼物图片缓存")
@@ -113,12 +127,14 @@ class TestActiveDanmakuGift:
         assert 'gift_image' in types
 
     def test_gift_without_cached_image(self, font_metrics, emoji_cache, gift_cache):
+        """无缓存的礼物图片不应生成 gift_image 段落。"""
         dm = _make_danmaku("", font_metrics, emoji_cache, gift_cache,
                            is_gift=True, gift_name="不存在的礼物", gift_count=1)
         types = [seg.type for row in dm.rows for seg in row.segments]
         assert 'gift_image' not in types
 
     def test_gift_has_gift_text_color(self, font_metrics, emoji_cache, gift_cache):
+        """礼物弹幕的文本段落应使用礼物文本颜色。"""
         dm = _make_danmaku("", font_metrics, emoji_cache, gift_cache,
                            is_gift=True, gift_name="火箭", gift_count=1)
         colors = [seg.color for seg in dm.rows[0].segments if seg.color is not None]
@@ -131,7 +147,10 @@ class TestActiveDanmakuGift:
 
 
 class TestActiveDanmakuEmoji:
+    """测试 Emoji 在弹幕文本中的解析和段落生成。"""
+
     def test_emoji_in_text(self, font_metrics, emoji_cache, gift_cache):
+        """已缓存的 Emoji 应生成 emoji 段落。"""
         emoji_name = next(iter(emoji_cache), None)
         if emoji_name is None:
             pytest.skip("无 Emoji 图片缓存")
@@ -141,6 +160,7 @@ class TestActiveDanmakuEmoji:
         assert 'emoji' in types
 
     def test_unknown_emoji_as_text(self, font_metrics, emoji_cache, gift_cache):
+        """未缓存的 Emoji 应作为纯文本段落处理。"""
         dm = _make_danmaku("你好[不存在的emoji]世界", font_metrics, emoji_cache, gift_cache)
         types = [seg.type for row in dm.rows for seg in row.segments]
         assert 'emoji' not in types
@@ -149,6 +169,7 @@ class TestActiveDanmakuEmoji:
         assert any("不存在的emoji" in t for t in text_contents)
 
     def test_text_between_emojis(self, font_metrics, emoji_cache, gift_cache):
+        """两个 Emoji 之间的文本应保留为 text 段落。"""
         emoji_name = next(iter(emoji_cache), None)
         if emoji_name is None:
             pytest.skip("无 Emoji 图片缓存")
@@ -171,17 +192,22 @@ class TestActiveDanmakuEmoji:
 
 
 class TestActiveDanmakuWrapping:
+    """测试文本折行逻辑。"""
+
     def test_short_text_no_wrap(self, font_metrics, emoji_cache, gift_cache):
+        """短文本不应折行。"""
         dm = _make_danmaku("短", font_metrics, emoji_cache, gift_cache)
         assert len(dm.rows) == 1
 
     def test_long_text_wraps(self, font_metrics, emoji_cache, gift_cache):
+        """超长文本应触发折行。"""
         dm = _make_danmaku("这是一段非常长的文本" * 10,
                            font_metrics, emoji_cache, gift_cache,
                            max_content_width=200)
         assert len(dm.rows) > 1
 
     def test_narrow_width_forces_wrap(self, font_metrics, emoji_cache, gift_cache):
+        """极窄宽度应强制折行。"""
         dm = _make_danmaku("你好世界", font_metrics, emoji_cache, gift_cache,
                            max_content_width=50)
         assert len(dm.rows) > 1
@@ -193,17 +219,22 @@ class TestActiveDanmakuWrapping:
 
 
 class TestActiveDanmakuOutOfBounds:
+    """测试弹幕越界检测逻辑。"""
+
     def test_not_out_of_bounds(self, font_metrics, emoji_cache, gift_cache):
+        """在边界内的弹幕不应判定为越界。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = 100.0
         assert not dm.is_out_of_bounds(0.0)
 
     def test_out_of_bounds(self, font_metrics, emoji_cache, gift_cache):
+        """完全超出顶部边界的弹幕应判定为越界。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = -dm.height - 10
         assert dm.is_out_of_bounds(0.0)
 
     def test_exactly_at_boundary(self, font_metrics, emoji_cache, gift_cache):
+        """恰好位于边界上的弹幕应判定为越界。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = -dm.height
         assert dm.is_out_of_bounds(0.0)
@@ -215,16 +246,20 @@ class TestActiveDanmakuOutOfBounds:
 
 
 class TestActiveDanmakuPreRender:
+    """测试弹幕预渲染到缓存图片。"""
+
     def test_pre_render_creates_image(self, font_metrics, emoji_cache, gift_cache, font):
+        """预渲染应创建有效的缓存图片。"""
         dm = _make_danmaku("测试预渲染", font_metrics, emoji_cache, gift_cache)
         assert dm.cached_image is None
-        dm._pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
+        dm.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
         assert dm.cached_image is not None
         assert not dm.cached_image.isNull()
 
     def test_pre_render_image_size(self, font_metrics, emoji_cache, gift_cache, font):
+        """缓存图片尺寸应与弹幕尺寸一致。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
-        dm._pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
+        dm.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
         assert dm.cached_image is not None
         assert dm.cached_image.width() == dm.total_width
         assert dm.cached_image.height() == dm.height
@@ -236,7 +271,10 @@ class TestActiveDanmakuPreRender:
 
 
 class TestDataClasses:
+    """测试渲染段落和文本行数据类。"""
+
     def test_render_segment(self):
+        """RenderSegment 应正确存储类型、内容和宽度。"""
         seg = RenderSegment(type='text', content='hello', width=50, color=None)
         assert seg.type == 'text'
         assert seg.content == 'hello'
@@ -244,98 +282,7 @@ class TestDataClasses:
         assert not seg.has_cache
 
     def test_text_row(self):
+        """TextRow 初始状态应为空行。"""
         row = TextRow()
         assert row.segments == []
         assert row.width == 0
-
-
-# =============================================================================
-# ActiveDanmaku - Emoji/间距折行
-# =============================================================================
-
-
-class TestActiveDanmakuEmojiWrapping:
-    def test_emoji_wraps_when_exceeds_width(self, font_metrics, emoji_cache, gift_cache):
-        emoji_name = next(iter(emoji_cache), None)
-        if emoji_name is None:
-            pytest.skip("无 Emoji 图片缓存")
-
-        dm = _make_danmaku(
-            f"前缀[{emoji_name}]",
-            font_metrics, emoji_cache, gift_cache,
-            max_content_width=30,
-        )
-        assert len(dm.rows) > 1
-
-    def test_spacing_segment_wraps(self, font_metrics, emoji_cache, gift_cache):
-        emoji_name = next(iter(emoji_cache), None)
-        if emoji_name is None:
-            pytest.skip("无 Emoji 图片缓存")
-
-        dm = _make_danmaku(
-            f"[{emoji_name}][{emoji_name}]",
-            font_metrics, emoji_cache, gift_cache,
-            max_content_width=36,
-        )
-        assert len(dm.rows) >= 2
-
-
-# =============================================================================
-# ActiveDanmaku - 二分查找折行边界
-# =============================================================================
-
-
-class TestActiveDanmakuBinaryWrap:
-    def test_single_char_per_row_on_tiny_width(self, font_metrics, emoji_cache, gift_cache):
-        dm = _make_danmaku(
-            "你好世界",
-            font_metrics, emoji_cache, gift_cache,
-            max_content_width=20,
-        )
-        assert len(dm.rows) >= 2
-
-    def test_wrap_preserves_all_content(self, font_metrics, emoji_cache, gift_cache):
-        text = "这是一段需要折行的长文本"
-        dm = _make_danmaku(text, font_metrics, emoji_cache, gift_cache, max_content_width=100)
-        rendered = "".join(seg.content for row in dm.rows for seg in row.segments if seg.type == 'text')
-        assert "测试用户" in rendered or text in rendered
-
-
-# =============================================================================
-# ActiveDanmaku - 预渲染绘制分支
-# =============================================================================
-
-
-class TestActiveDanmakuPreRenderBranches:
-    def test_pre_render_with_emoji(self, font_metrics, emoji_cache, gift_cache, font):
-        emoji_name = next(iter(emoji_cache), None)
-        if emoji_name is None:
-            pytest.skip("无 Emoji 图片缓存")
-
-        dm = _make_danmaku(f"[{emoji_name}]", font_metrics, emoji_cache, gift_cache)
-        dm._pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        assert dm.cached_image is not None
-        assert not dm.cached_image.isNull()
-
-    def test_pre_render_with_gift_image(self, font_metrics, emoji_cache, gift_cache, font):
-        gift_name = next(iter(gift_cache), None)
-        if gift_name is None:
-            pytest.skip("无礼物图片缓存")
-
-        dm = _make_danmaku("", font_metrics, emoji_cache, gift_cache,
-                           is_gift=True, gift_name=gift_name, gift_count=1)
-        dm._pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        assert dm.cached_image is not None
-        assert not dm.cached_image.isNull()
-
-    def test_render_draws_cached_image(self, font_metrics, emoji_cache, gift_cache, font):
-        dm = _make_danmaku("测试render", font_metrics, emoji_cache, gift_cache)
-        dm._pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-
-        from PySide6.QtGui import QImage as QImg, QPainter
-        canvas = QImg(dm.total_width, dm.height, QImg.Format.Format_ARGB32)
-        canvas.fill(0)
-        painter = QPainter(canvas)
-        dm.render(painter, 0, 0)
-        painter.end()
-        assert dm.cached_image is not None

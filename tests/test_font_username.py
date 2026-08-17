@@ -158,10 +158,41 @@ def test_username_font_support():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     font_dir = os.path.join(script_dir, "..", "assets", "fonts")
     font_map = {
-        "Microsoft YaHei": "msyhbd.ttc",
-        "Noto Sans Tai Tham": "NotoSansTaiTham-Regular.ttf",
+        "Microsoft YaHei": "msyh.ttc",
+        "Noto Sans CJK SC": "NotoSansCJKsc-Regular.otf",
+        "Segoe UI": "segoeui.ttf",
         "Segoe UI Emoji": "seguiemj.ttf",
-        "Segoe UI Symbol": "seguisym.ttf",
+        "Segoe UI Symbol": "SegoeUISymbol.ttf",
+        "Noto Sans Symbols 2": "NotoSansSymbols2-Regular.ttf",
+        "Tahoma": "tahoma.ttf",
+        "Nirmala UI": "Nirmala.ttc",
+        "Microsoft Himalaya": "himalaya.ttf",
+        "Leelawadee UI": "LeelawUI.ttf",
+        "Microsoft Tai Le": "taile.ttf",
+        "Microsoft Yi Baiti": "msyi.ttf",
+        "Segoe UI Historic": "seguihis.ttf",
+        "Malgun Gothic": "malgun.ttf",
+        "Myanmar Text": "mmrtext.ttf",
+        "Gadugi": "gadugi.ttf",
+        "Noto Sans Canadian Aboriginal": "NotoSansCanadianAboriginal-Regular.ttf",
+        "Noto Sans New Tai Lue": "NotoSansNewTaiLue-Regular.ttf",
+        "Noto Sans Limbu": "NotoSansLimbu-Regular.ttf",
+        "Noto Sans Tai Viet": "NotoSansTaiViet-Regular.ttf",
+        "Noto Sans Tagalog": "NotoSansTagalog-Regular.ttf",
+        "Noto Sans Tagbanwa": "NotoSansTagbanwa-Regular.ttf",
+        "Noto Sans Sundanese": "NotoSansSundanese-Regular.ttf",
+        "Noto Sans Lepcha": "NotoSansLepcha-Regular.ttf",
+        "Noto Sans Cham": "NotoSansCham-Regular.ttf",
+        "Noto Sans Vai": "NotoSansVai-Regular.ttf",
+        "Noto Sans Kayah Li": "NotoSansKayahLi-Regular.ttf",
+        "Noto Sans Soyombo": "NotoSansSoyombo-Regular.ttf",
+        "Noto Sans Samaritan": "NotoSansSamaritan-Regular.ttf",
+        "Noto Sans Mandaic": "NotoSansMandaic-Regular.ttf",
+        "Noto Sans Math": "NotoSansMath-Regular.ttf",
+        "Noto Sans Tai Tham": "NotoSansTaiTham-Regular.ttf",
+        "Noto Sans Balinese": "NotoSansBalinese-Regular.ttf",
+        "Noto Sans Batak": "NotoSansBatak-Regular.ttf",
+        "Noto Sans Javanese": "NotoSansJavanese-Regular.ttf",
     }
     for family, filename in font_map.items():
         path = os.path.normpath(os.path.join(font_dir, filename))
@@ -171,8 +202,7 @@ def test_username_font_support():
         else:
             print(f"  [跳过] {family} ← {path} (文件不存在)")
 
-    families = ["Microsoft YaHei", "Microsoft Tai Le","Microsoft Himalaya",
-                    "Noto Sans Tai Tham", "Leelawadee UI", "Segoe UI Emoji", "Segoe UI Symbol"]
+    families = list(font_map.keys())
     font = QFont()
     font.setFamilies(families)
     font.setPointSize(25)
@@ -181,6 +211,8 @@ def test_username_font_support():
     fm = QFontMetrics(font)
 
     # username = "ᥫᩣ𓂃𓈒𓏸"
+    # username = "♑️👑大白兔👑"
+    # username = "♥️冉与瑶♥️"
     username = "ℳ๓乐莹๓ོ"
     print("=" * 60)
     print("字体渲染能力测试")

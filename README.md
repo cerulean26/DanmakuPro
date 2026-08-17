@@ -46,9 +46,6 @@ pip install .
 ```bash
 # CLI 模式
 danmakupro source/视频.mp4 source/弹幕.xml
-
-# GUI 模式（弹出文件选择器）
-danmakupro-gui
 ```
 
 ## 布局说明
@@ -80,8 +77,6 @@ danmakupro-gui
 | `DAMPING_FACTOR` | 0.15 | 文本弹幕阻尼系数 |
 | `GIFT_DAMPING_FACTOR` | 0.25 | 礼物阻尼系数 |
 | `GIFT_DWELL_TIME` | 5.0 | 礼物停留时间（秒），`None` 禁用 |
-| `GIFT_FADE_OUT_ZONE` | 40.0 | 礼物淡出区域高度（像素） |
-| `FADE_OUT_ZONE` | 30.0 | 文本弹幕淡出区域高度 |
 | `MIN_GIFT_PRICE` | 0.0 | 最低礼物价格过滤（元） |
 
 ## 处理流程
@@ -103,7 +98,6 @@ XML 解析 → 资源加载 → 视频信息获取 → 弹幕布局计算 → �
 DanmakuPro/
 ├── src/danmakupro/       # 核心包
 │   ├── cli.py            # CLI 入口
-│   ├── gui.py            # GUI 入口（文件选择器）
 │   ├── burner.py         # 压制引擎（编排管线）
 │   ├── models.py         # 数据模型与弹幕渲染
 │   ├── parser.py         # XML 流式解析
