@@ -4,71 +4,25 @@
 """
 
 from __future__ import annotations
-
 from pathlib import Path
-from PySide6.QtCore import QByteArray
 from loguru import logger
 from PySide6.QtCore import Qt
 from PySide6.QtGui import (
     QGuiApplication, QImage, QColor, QFont, QFontMetrics, QFontDatabase, QRawFont,
 )
-
 from ..config.models import DEFAULT_CONFIG
 from ..input.models import DanmakuEvent
 from ..utils import extract_emoji_names
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-_CORE_FONTS: dict[str, str] = {
-    "Microsoft YaHei": "msyh.ttc",
-    "Microsoft YaHei Bold": "msyhbd.ttc",
-    "Segoe UI": "segoeui.ttf",
-    "Segoe UI Emoji": "seguiemj.ttf",
-    "Segoe UI Symbol": "SegoeUISymbol.ttf",
-}
-
-_EXTENDED_FONTS: dict[str, str] = {
-    "Noto Sans": "NotoSans.ttf",
-    "Noto Sans CJK SC": "NotoSansCJKsc-Regular.otf",
-    "Noto Sans Symbols 2": "NotoSansSymbols2-Regular.ttf",
-    "Tahoma": "tahoma.ttf",
-    "Nirmala UI": "Nirmala.ttc", 
-    "Malgun Gothic": "malgun.ttf",
-}
-
-
-def load_image_assets(
-    asset_dir: Path,
-    asset_names: set[str],
-    line_height: int,
-    cache: dict[str, QImage],
-    asset_type: str,
-) -> set[str]:
-    """加载图片资源
-
-    Returns:
-        未能加载的图片名称集合
-    """
-    missing: set[str] = set()
-    if not asset_dir.exists():
-        logger.warning(f"{asset_type} 文件夹不存在")
-        return asset_names
-
-    for name in asset_names:
-        file_path = asset_dir / f"{name}.png"
-        img = QImage(str(file_path))
-        if not img.isNull():
-            cache[name] = img.scaled(
-                line_height, line_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            missing.add(name)
-
-    if missing:
-        logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
-    return missing
+# 核心字体族：按优先级排列，所有 Windows 10+ 系统均自带
+_CORE_FAMILIES: list[str] = [
+    "Microsoft YaHei",
+    "Segoe UI",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+]
 
 
 class AssetLoader:
@@ -83,7 +37,6 @@ class AssetLoader:
         if QGuiApplication.instance() is None:
             raise RuntimeError("必须先创建 QApplication")
 
-        self._font_dir = _PROJECT_ROOT / "assets" / "fonts"
         self._loaded_families: list[str] = []
         self._init_fonts()
 
@@ -91,23 +44,14 @@ class AssetLoader:
         self.gift_dir = _PROJECT_ROOT / "assets" / "gift"
 
     def _init_fonts(self) -> None:
-        """加载核心字体"""
-        for family, filename in _CORE_FONTS.items():
-            path = self._font_dir / filename
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
-                self._loaded_families.append(family)
-
+        """初始化核心字体族"""
+        self._loaded_families = list(_CORE_FAMILIES)
         self._rebuild_font()
 
     def _rebuild_font(self) -> None:
         """重建字体"""
-        bold_families = [f for f in self._loaded_families if "Bold" in f]
-        regular_families = [f for f in self._loaded_families if "Bold" not in f]
-        families = bold_families + regular_families
-
         self.font = QFont()
-        self.font.setFamilies(families)
+        self.font.setFamilies(self._loaded_families)
         self.font.setPointSize(self._font_size)
         self.font.setBold(True)
         self.font.setStyleStrategy(QFont.StyleStrategy.PreferQuality)
@@ -130,42 +74,76 @@ class AssetLoader:
                     used_emoji.add(name)
 
         self._load_fonts_for_chars(all_chars)
-        load_image_assets(self.emoji_dir, used_emoji, self.line_height, self.emoji_cache, "Emoji")
-        load_image_assets(self.gift_dir, used_gift, self.line_height, self.gift_cache, "礼物")
+        self._load_image_assets(self.emoji_dir, used_emoji, self.emoji_cache, "Emoji")
+        self._load_image_assets(self.gift_dir, used_gift, self.gift_cache, "礼物")
+
+    def _load_image_assets(
+        self,
+        asset_dir: Path,
+        asset_names: set[str],
+        cache: dict[str, QImage],
+        asset_type: str,
+    ) -> None:
+        """加载图片资源"""
+        missing: set[str] = set()
+        if not asset_dir.exists():
+            logger.warning(f"{asset_type} 文件夹不存在")
+            return
+
+        for name in asset_names:
+            file_path = asset_dir / f"{name}.png"
+            img = QImage(str(file_path))
+            if not img.isNull():
+                cache[name] = img.scaled(
+                    self.line_height, self.line_height,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            else:
+                missing.add(name)
+
+        if missing:
+            logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
 
     def _load_fonts_for_chars(self, chars: set[str]) -> None:
-        """按需加载扩展字体"""
+        """按需从系统字体库加载覆盖缺失字符的字体"""
         raw_fonts = self._build_raw_fonts()
         missing = self._find_missing_chars(chars, raw_fonts)
         if not missing:
             return
 
         newly_loaded = 0
-        for family, filename in _EXTENDED_FONTS.items():
+        db = QFontDatabase()
+        for family in db.families():
             if family in self._loaded_families:
                 continue
-            path = self._font_dir / filename
-            if not path.exists():
-                continue
-            if self._font_covers_any(path, missing):
-                QFontDatabase.addApplicationFont(str(path))
+            raw = self._build_single_raw_font(family)
+            if any(self._raw_font_has_char(raw, c) for c in missing):
                 self._loaded_families.append(family)
                 newly_loaded += 1
-                raw_fonts = self._build_raw_fonts()
-                missing = self._find_missing_chars(chars, raw_fonts)
+                missing = {c for c in missing if not self._raw_font_has_char(raw, c)}
                 if not missing:
                     break
 
         if newly_loaded > 0:
             self._rebuild_font()
 
+        if missing:
+            logger.warning(
+                f"以下字符无字体覆盖，将显示为占位符: {''.join(sorted(missing))}"
+            )
+
     def _build_raw_fonts(self) -> list[QRawFont]:
         """构建已加载字体的 QRawFont 列表"""
         raw_fonts = []
         for family in self._loaded_families:
-            f = QFont(family, self._font_size, QFont.Weight.Bold)
-            raw_fonts.append(QRawFont.fromFont(f))
+            raw_fonts.append(self._build_single_raw_font(family))
         return raw_fonts
+
+    def _build_single_raw_font(self, family: str) -> QRawFont:
+        """构建单个字体的 QRawFont"""
+        f = QFont(family, self._font_size, QFont.Weight.Bold)
+        return QRawFont.fromFont(f)
 
     def _find_missing_chars(self, chars: set[str], raw_fonts: list[QRawFont]) -> set[str]:
         """查找缺失字符"""
@@ -174,22 +152,14 @@ class AssetLoader:
             if c == ' ':
                 continue
             for rf in raw_fonts:
-                indexes = rf.glyphIndexesForString(c)
-                if len(indexes) > 0 and indexes[0] != 0:
+                if self._raw_font_has_char(rf, c):
                     break
             else:
                 missing.add(c)
         return missing
 
     @staticmethod
-    def _font_covers_any(path: Path, chars: set[str]) -> bool:
-        """检查字体是否覆盖任意字符"""
-        with open(path, "rb") as f:
-            data = QByteArray(f.read())
-        rf = QRawFont()
-        rf.loadFromData(data, 25.0, QFont.HintingPreference.PreferDefaultHinting)
-        for c in chars:
-            indexes = rf.glyphIndexesForString(c)
-            if len(indexes) > 0 and indexes[0] != 0:
-                return True
-        return False
+    def _raw_font_has_char(rf: QRawFont, char: str) -> bool:
+        """检查 QRawFont 是否包含指定字符的字形"""
+        indexes = rf.glyphIndexesForString(char)
+        return len(indexes) > 0 and indexes[0] != 0
