@@ -5,6 +5,7 @@ DanmakuBurner 是弹幕压制的编排器，负责组合各子模块完成完整
 
 from __future__ import annotations
 
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -252,7 +253,7 @@ class DanmakuBurner:
 
                 # 渲染当前帧
                 renderer.render_frame(
-                    active_text + active_gift,
+                    chain(active_text, active_gift),
                     layout_params,
                     fade_out_zone,
                 )

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 
@@ -38,7 +40,7 @@ class DanmakuRenderer:
 
     def render_frame(
         self,
-        active_danmakus: list[ActiveDanmaku],
+        active_danmakus: Iterable[ActiveDanmaku],
         layout_params: LayoutParams,
         fade_out_zone: float,
     ) -> None:
@@ -62,11 +64,10 @@ class DanmakuRenderer:
                 threshold = layout_params.text_top + fade_out_zone
 
                 if cy < threshold:
-                    if cy <= limit:
+                    if cy + dm.height <= limit:
                         continue
-                    else:
-                        alpha = (cy - limit) / fade_out_zone
-                        alpha = max(0.0, min(1.0, alpha))
+                    alpha = (cy - limit) / fade_out_zone
+                    alpha = max(0.0, min(1.0, alpha))
             self.painter.setOpacity(alpha)
             local_x = dm.x - self._layer_params.layer_x
             local_y = int(dm.current_y) - layer_y

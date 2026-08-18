@@ -183,18 +183,15 @@ class ActiveDanmaku:
         Returns:
             原始渲染段落列表（未折行，每个段落包含 type、content、width 等属性）
         """
-        img_target_size = self.line_height
-
         if self.event.is_gift:
-            return self._build_gift_segments(fm, gift_cache, img_target_size)
+            return self._build_gift_segments(fm, gift_cache)
 
-        return self._build_text_segments(fm, emoji_cache, img_target_size)
+        return self._build_text_segments(fm, emoji_cache)
 
     def _build_gift_segments(
         self,
         fm: QFontMetrics,
         gift_cache: dict[str, QImage],
-        img_target_size: int,
     ) -> list[RenderSegment]:
         """构建礼物弹幕的渲染段落。
 
@@ -202,7 +199,6 @@ class ActiveDanmaku:
         Args:
             fm: 字体度量信息
             gift_cache: 礼物图片缓存
-            img_target_size: 图片目标尺寸（像素）
         Returns:
             礼物弹幕的渲染段落列表
         """
@@ -223,7 +219,8 @@ class ActiveDanmaku:
         if self.event.gift_name in gift_cache:
             raw_segments.append(RenderSegment('spacing', '', DEFAULT_CONFIG.style.gift_spacing))
             raw_segments.append(RenderSegment(
-                'gift_image', self.event.gift_name, img_target_size, has_cache=True
+                'gift_image', self.event.gift_name,
+                gift_cache[self.event.gift_name].width(), has_cache=True
             ))
         count_text = f" x {self.event.gift_count} "
         raw_segments.append(RenderSegment(
@@ -235,7 +232,6 @@ class ActiveDanmaku:
         self,
         fm: QFontMetrics,
         emoji_cache: dict[str, QImage],
-        img_target_size: int,
     ) -> list[RenderSegment]:
         """解析弹幕文本为渲染段落，处理 Emoji 替换。
 
@@ -244,7 +240,6 @@ class ActiveDanmaku:
         Args:
             fm: 字体度量信息
             emoji_cache: Emoji 图片缓存
-            img_target_size: 图片目标尺寸（像素）
         Returns:
             普通弹幕的渲染段落列表
         """
@@ -279,7 +274,8 @@ class ActiveDanmaku:
                                 'spacing', '', DEFAULT_CONFIG.style.emoji_spacing
                             ))
                         raw_segments.append(RenderSegment(
-                            'emoji', name, img_target_size, has_cache=True
+                            'emoji', name,
+                            emoji_cache[name].width(), has_cache=True
                         ))
                         i = end + 1
                         continue

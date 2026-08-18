@@ -386,9 +386,14 @@ class LayoutEngine:
                 dm.is_locked_to_next = False
 
         # ---- 阶段 2：阻尼动画更新当前位置 ----
-        for dm in active_danmakus:
+        for i, dm in enumerate(active_danmakus):
             if dm.is_first_activation:
-                dm.current_y = zone_bottom - dm.height
+                entry_y = float(zone_bottom - dm.height)
+                if i > 0:
+                    above = active_danmakus[i - 1]
+                    above_bottom = above.current_y + above.height
+                    entry_y = min(entry_y, above_bottom + gap)
+                dm.current_y = entry_y
                 dm.is_first_activation = False
             else:
                 diff = dm.target_y - dm.current_y
