@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import subprocess
 import threading
 
@@ -19,8 +18,6 @@ from ..layout.params import LayerParams
 
 class FFmpegManager:
     """FFmpeg 进程管理器"""
-
-    _SENTINEL = None
 
     def __init__(
         self,
@@ -39,20 +36,10 @@ class FFmpegManager:
         self.process: subprocess.Popen | None = None
         self.stderr_thread: threading.Thread | None = None
 
-        self._frame_queue: queue.Queue[bytes | None] | None = None
-        self._writer_thread: threading.Thread | None = None
-        self._writer_error: BaseException | None = None
-        self._writer_error_event = threading.Event()
-
-        # 队列大小限制（帧数），防止内存无限增长
-        self._max_queue_frames: int = system_params.max_queue_frames
-        self._queue_frame_size: int = 0  # 当前队列中的帧数
-        self._queue_not_full = threading.Condition()
-
         self._resolve_encode_mode()
 
     def _resolve_encode_mode(self) -> None:
-        """解析编码模式。所有模式均使用异步写入。"""
+        """解析编码模式。"""
         if self.encode_mode == EncodeMode.CPU:
             self.active_pipeline = EncodeMode.CPU
             logger.info("编码模式: CPU (libx264)")
@@ -267,14 +254,7 @@ class FFmpegManager:
 
         self.stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         self.stderr_thread.start()
-
-        self._writer_error = None
-        self._writer_error_event.clear()
-
-        self._frame_queue = queue.Queue()
-        self._writer_thread = threading.Thread(target=self._pipe_writer_loop, daemon=True)
-        self._writer_thread.start()
-        logger.debug("FFmpeg 写入线程已启动")
+        logger.debug("FFmpeg 进程已启动")
 
     def _health_check(self) -> bool:
         """检查 FFmpeg 进程是否存活"""
@@ -285,102 +265,53 @@ class FFmpegManager:
             return False
         return True
 
-    def _pipe_writer_loop(self) -> None:
-        """异步写入线程"""
-        assert self._frame_queue is not None
-        assert self.process is not None
-        assert self.process.stdin is not None
+    def submit_frame(self, data: memoryview) -> None:
+        """提交一帧数据（同步写入 FFmpeg stdin）。
 
-        while True:
-            data = self._frame_queue.get()
-            if data is self._SENTINEL:
-                break
-            try:
-                self.process.stdin.write(data)
-                self.process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                logger.error(f"FFmpeg 管道断开: {e}")
-                self._writer_error = e
-                self._writer_error_event.set()
-                self._drain_queue()
-                break
-            finally:
-                self._queue_frame_size -= 1
-                with self._queue_not_full:
-                    self._queue_not_full.notify()
+        Args:
+            data: 帧像素数据的 memoryview 视图
 
-    def _drain_queue(self) -> None:
-        """清空队列"""
-        if self._frame_queue is None:
-            return
-        dropped = 0
-        while not self._frame_queue.empty():
-            try:
-                self._frame_queue.get_nowait()
-                dropped += 1
-            except queue.Empty:
-                break
-        self._queue_frame_size = max(0, self._queue_frame_size - dropped)
-
-    def submit_frame(self, data: bytes) -> bool:
-        """提交一帧数据（统一使用异步写入）。"""
-        if self._writer_error_event.is_set() and self._writer_error is not None:
-            raise self._writer_error
-
+        Raises:
+            RuntimeError: FFmpeg 进程已死亡
+            BrokenPipeError: FFmpeg 管道断开
+        """
         if not self._health_check():
-            error = RuntimeError("FFmpeg 进程已死亡")
-            self._writer_error = error
-            self._writer_error_event.set()
-            raise error
+            raise RuntimeError("FFmpeg 进程已死亡")
 
-        if self._frame_queue is None:
+        if self.process is None or self.process.stdin is None:
             raise RuntimeError("FFmpeg 未启动")
-        # 限制队列大小，防止内存无限增长
-        with self._queue_not_full:
-            while self._queue_frame_size >= self._max_queue_frames:
-                self._queue_not_full.wait(timeout=1.0)
-                if self._writer_error_event.is_set():
-                    raise self._writer_error or RuntimeError("FFmpeg 写入线程出错")
-        self._frame_queue.put(data)
-        self._queue_frame_size += 1
-        return True
+
+        try:
+            self.process.stdin.write(data)
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            raise BrokenPipeError(f"FFmpeg 管道断开: {e}") from e
 
     def cleanup(self) -> None:
         """清理资源。
 
         按顺序完成：
-        1. 停止异步写入线程（发送哨兵信号并等待消费完毕）
-        2. 关闭 stdin 管道，通知 FFmpeg 输入结束
-        3. 等待 stderr 线程结束（避免日志丢失）
-        4. 等待 FFmpeg 进程退出
-        5. 关闭 stderr 管道，释放资源
+        1. 关闭 stdin 管道，通知 FFmpeg 输入结束
+        2. 等待 stderr 线程结束（避免日志丢失）
+        3. 等待 FFmpeg 进程退出
+        4. 关闭 stderr 管道，释放资源
         """
-        # 第一步：停止异步写入线程
-        if self._frame_queue is not None and self._writer_thread is not None:
-            self._frame_queue.put(self._SENTINEL)
-            logger.debug("等待写入线程完成...")
-            self._writer_thread.join(timeout=300.0)
-            if self._writer_thread.is_alive():
-                logger.warning("写入线程超时，强制终止")
-            else:
-                logger.debug("写入线程已完成")
-
         proc = self.process
         if proc is None:
             return
 
-        # 第二步：关闭 stdin，通知 FFmpeg 输入结束
+        # 第一步：关闭 stdin，通知 FFmpeg 输入结束
         if proc.stdin:
             try:
                 proc.stdin.close()
             except (OSError, BrokenPipeError):
                 pass
 
-        # 第三步：等待 stderr 线程结束，确保日志不丢失
+        # 第二步：等待 stderr 线程结束，确保日志不丢失
         if self.stderr_thread and self.stderr_thread.is_alive():
             self.stderr_thread.join(timeout=self.system_params.stderr_thread_timeout)
 
-        # 第四步：等待 FFmpeg 进程退出
+        # 第三步：等待 FFmpeg 进程退出
         logger.debug("等待 FFmpeg 完成编码...")
         try:
             return_code = proc.wait(timeout=300.0)
@@ -393,7 +324,7 @@ class FFmpegManager:
             proc.kill()
             proc.wait()
         finally:
-            # 第五步：关闭 stderr 管道，释放资源
+            # 第四步：关闭 stderr 管道，释放资源
             if proc.stderr:
                 try:
                     proc.stderr.close()

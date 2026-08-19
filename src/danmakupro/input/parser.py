@@ -8,7 +8,7 @@ from __future__ import annotations
 from lxml import etree  # type: ignore
 from loguru import logger
 
-from .models import DanmakuEvent
+from .event import DanmakuEvent
 
 
 def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:

@@ -11,7 +11,7 @@ from PySide6.QtGui import (
     QGuiApplication, QImage, QColor, QFont, QFontMetrics, QFontDatabase, QRawFont,
 )
 from ..config.models import DEFAULT_CONFIG
-from ..input.models import DanmakuEvent
+from ..input.event import DanmakuEvent
 from ..utils import extract_emoji_names
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -23,6 +23,43 @@ _CORE_FAMILIES: list[str] = [
     "Segoe UI Emoji",
     "Segoe UI Symbol",
 ]
+
+
+def load_image_assets(
+    asset_dir: Path,
+    asset_names: set[str],
+    line_height: int,
+    cache: dict[str, QImage],
+    asset_type: str,
+) -> None:
+    """加载图片资源到缓存字典（独立函数，供测试等场景使用）。
+
+    Args:
+        asset_dir: 图片资源目录
+        asset_names: 需要加载的图片名称集合（不含扩展名）
+        line_height: 目标行高，图片将等比缩放至此高度
+        cache: 目标缓存字典，key 为名称，value 为缩放后的 QImage
+        asset_type: 资源类型描述（用于日志）
+    """
+    missing: set[str] = set()
+    if not asset_dir.exists():
+        logger.warning(f"{asset_type} 文件夹不存在")
+        return
+
+    for name in asset_names:
+        file_path = asset_dir / f"{name}.png"
+        img = QImage(str(file_path))
+        if not img.isNull():
+            cache[name] = img.scaled(
+                line_height, line_height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        else:
+            missing.add(name)
+
+    if missing:
+        logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
 
 
 class AssetLoader:
@@ -84,26 +121,8 @@ class AssetLoader:
         cache: dict[str, QImage],
         asset_type: str,
     ) -> None:
-        """加载图片资源"""
-        missing: set[str] = set()
-        if not asset_dir.exists():
-            logger.warning(f"{asset_type} 文件夹不存在")
-            return
-
-        for name in asset_names:
-            file_path = asset_dir / f"{name}.png"
-            img = QImage(str(file_path))
-            if not img.isNull():
-                cache[name] = img.scaled(
-                    self.line_height, self.line_height,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            else:
-                missing.add(name)
-
-        if missing:
-            logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
+        """加载图片资源，委托给模块级函数。"""
+        load_image_assets(asset_dir, asset_names, self.line_height, cache, asset_type)
 
     def _load_fonts_for_chars(self, chars: set[str]) -> None:
         """按需从系统字体库加载覆盖缺失字符的字体"""

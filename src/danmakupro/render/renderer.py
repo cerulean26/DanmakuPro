@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 
-from ..input.models import ActiveDanmaku
+from ..layout.active import ActiveDanmaku
 from ..layout.params import LayoutParams, LayerParams
 
 
@@ -73,13 +73,16 @@ class DanmakuRenderer:
             local_y = int(dm.current_y) - layer_y
             dm.render(self.painter, int(local_x), local_y)
 
-    def get_frame_data(self) -> bytes:
-        """获取当前画布的原始像素数据（拷贝，生命周期安全）。
+    def get_frame_data(self) -> memoryview:
+        """获取当前画布的像素数据。
+
+        PySide6 中 QImage.bits() 必须拷贝一次像素数据（无法零拷贝），
+        用 memoryview 包裹返回，避免传递给 stdin.write 时产生二次拷贝。
 
         Returns:
-            画布像素数据的 bytes 副本
+            画布像素数据的 memoryview 视图
         """
-        return bytes(self.canvas.bits())
+        return memoryview(self.canvas.bits())
 
     def end(self) -> None:
         """结束绘制，释放 QPainter 资源。"""
