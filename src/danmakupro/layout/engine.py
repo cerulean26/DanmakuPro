@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 from ..config.models import LayoutStyle, LayoutRatio, AnimationParams, DEFAULT_CONFIG
 
 if TYPE_CHECKING:
-    from ..input.models import DanmakuEvent, ActiveDanmaku
+    from ..input.event import DanmakuEvent
+    from .active import ActiveDanmaku
     from ..render.assets import AssetLoader
 
 from PySide6.QtGui import QImage
@@ -94,22 +95,25 @@ class LayoutEngine:
     ) -> list['ActiveDanmaku']:
         """预创建弹幕对象（懒加载模式）。
 
-        创建 ActiveDanmaku 对象但不立即渲染，等到首次激活时才调用 pre_render。
+        使用 DanmakuLayoutBuilder 批量构建布局，再创建 ActiveDanmaku。
+        创建对象但不立即渲染，等到首次激活时才调用 pre_render。
         """
-        from ..input.models import ActiveDanmaku
+        from .active import ActiveDanmaku
+        from ..render.layout_builder import DanmakuLayoutBuilder
+
+        builder = DanmakuLayoutBuilder(
+            fm=asset_provider.fm,
+            emoji_cache=asset_provider.emoji_cache,
+            gift_cache=asset_provider.gift_cache,
+            max_content_width=layout_params.text_w,
+            line_height=asset_provider.line_height,
+            style=style,
+        )
 
         pool: list[ActiveDanmaku] = []
-
         for event in events:
-            dm = ActiveDanmaku(
-                event=event,
-                font_metrics=asset_provider.fm,
-                emoji_cache=asset_provider.emoji_cache,
-                gift_cache=asset_provider.gift_cache,
-                max_content_width=layout_params.text_w,
-                line_height=asset_provider.line_height,
-                style=style,
-            )
+            layout = builder.build(event)
+            dm = ActiveDanmaku(event=event, layout=layout, x=style.danmaku_x)
             pool.append(dm)
 
         return pool

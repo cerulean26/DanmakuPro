@@ -12,7 +12,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QImage
 
-from danmakupro.input.models import DanmakuEvent, ActiveDanmaku, RenderSegment
+from danmakupro.input.event import DanmakuEvent
+from danmakupro.layout.active import ActiveDanmaku
+from danmakupro.render.segments import RenderSegment
+from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 from danmakupro.input.parser import parse_xml
 from danmakupro.render.assets import AssetLoader
 from danmakupro.config.models import DEFAULT_CONFIG
@@ -147,14 +150,15 @@ class TestActiveDanmaku:
         # 先加载资源（确保礼物图片在缓存中）
         asset_loader.load_assets([event])
 
-        dm = ActiveDanmaku(
-            event=event,
-            font_metrics=asset_loader.fm,
+        builder = DanmakuLayoutBuilder(
+            fm=asset_loader.fm,
             emoji_cache=asset_loader.emoji_cache,
             gift_cache=asset_loader.gift_cache,
             max_content_width=800,
             line_height=asset_loader.line_height,
         )
+        layout = builder.build(event)
+        dm = ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
 
         # 验证尺寸已计算
         assert dm.total_width > 0
@@ -185,14 +189,15 @@ class TestActiveDanmaku:
 
         asset_loader.load_assets([event])
 
-        dm = ActiveDanmaku(
-            event=event,
-            font_metrics=asset_loader.fm,
+        builder = DanmakuLayoutBuilder(
+            fm=asset_loader.fm,
             emoji_cache=asset_loader.emoji_cache,
             gift_cache=asset_loader.gift_cache,
             max_content_width=800,
             line_height=asset_loader.line_height,
         )
+        layout = builder.build(event)
+        dm = ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
 
         # 初始状态：缓存图片为 None
         assert dm.cached_image is None
@@ -232,14 +237,15 @@ class TestGiftEndToEnd:
 
         asset_loader.load_assets([event])
 
-        dm = ActiveDanmaku(
-            event=event,
-            font_metrics=asset_loader.fm,
+        builder = DanmakuLayoutBuilder(
+            fm=asset_loader.fm,
             emoji_cache=asset_loader.emoji_cache,
             gift_cache=asset_loader.gift_cache,
             max_content_width=800,
             line_height=asset_loader.line_height,
         )
+        layout = builder.build(event)
+        dm = ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
         dm.pre_render(
             asset_loader.font,
             asset_loader.emoji_cache,

@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 from PySide6.QtGui import QColor
 
-from danmakupro.input.models import DanmakuEvent, ActiveDanmaku, RenderSegment, TextRow
+from danmakupro.input.event import DanmakuEvent
+from danmakupro.layout.active import ActiveDanmaku
+from danmakupro.render.segments import RenderSegment, TextRow
+from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 from danmakupro.config import DEFAULT_CONFIG
 
 style = DEFAULT_CONFIG.style
@@ -32,10 +35,15 @@ def _make_danmaku(
         time=1.0, user="测试用户", text=text,
         is_gift=is_gift, gift_name=gift_name, gift_count=gift_count,
     )
-    return ActiveDanmaku(
-        event, font_metrics, emoji_cache, gift_cache,
-        max_content_width=max_content_width, line_height=line_height,
+    builder = DanmakuLayoutBuilder(
+        fm=font_metrics,
+        emoji_cache=emoji_cache,
+        gift_cache=gift_cache,
+        max_content_width=max_content_width,
+        line_height=line_height,
     )
+    layout = builder.build(event)
+    return ActiveDanmaku(event=event, layout=layout, x=style.danmaku_x)
 
 
 # =============================================================================
