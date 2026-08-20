@@ -10,7 +10,6 @@ import pytest
 from PySide6.QtGui import QGuiApplication
 
 from danmakupro.input.parser import parse_xml
-from danmakupro.input.event import DanmakuEvent
 from danmakupro.config import DEFAULT_CONFIG
 
 
