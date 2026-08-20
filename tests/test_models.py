@@ -3,8 +3,6 @@
 测试 DanmakuEvent、ActiveDanmaku 的构建、分段、折行、尺寸计算和越界检测。
 """
 
-from pathlib import Path
-
 import pytest
 from PySide6.QtGui import QColor
 
