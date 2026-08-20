@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.claude/
+.vscode/
 
 # Virtual environments
 .venv
@@ -18,3 +20,5 @@ assets/
 # Test coverage
 .coverage
 htmlcov/
+.pytest_cache/   
+.ruff_cache/     
