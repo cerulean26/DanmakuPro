@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtGui import QColor
 
 from danmakupro.layout.engine import LayoutEngine, LayoutContext
-from danmakupro.layout.params import LayoutParams, LayerParams
+from danmakupro.layout.params import LayoutParams
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
 from danmakupro.render.layout_builder import DanmakuLayoutBuilder

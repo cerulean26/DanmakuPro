@@ -12,11 +12,11 @@ import pytest
 from PySide6.QtGui import QGuiApplication, QFont, QFontMetrics, QImage, QColor
 
 from danmakupro.config import DEFAULT_CONFIG
+from danmakupro.render.assets import load_image_assets
+from danmakupro.input.parser import parse_xml
 from danmakupro.utils import extract_emoji_names
 
 style = DEFAULT_CONFIG.style
-from danmakupro.render.assets import load_image_assets
-from danmakupro.input.parser import parse_xml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
