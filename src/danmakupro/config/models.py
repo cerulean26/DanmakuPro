@@ -134,16 +134,14 @@ class EncodeParams:
 class SystemParams:
     """系统参数配置"""
     pipe_buffer_size: int = 10_000_000
-    pipe_queue_size: int = 16
     ffmpeg_timeout: int = 10
     stderr_thread_timeout: int = 5
     video_alignment: int = 16
-    max_queue_frames: int = 64
+    assets_dir: str = "assets"
 
     def __post_init__(self):
-        _assert_positive(self, "pipe_buffer_size", "pipe_queue_size",
-                         "ffmpeg_timeout", "stderr_thread_timeout",
-                         "max_queue_frames")
+        _assert_positive(self, "pipe_buffer_size",
+                         "ffmpeg_timeout", "stderr_thread_timeout")
         if self.video_alignment <= 0 or (self.video_alignment & (self.video_alignment - 1)) != 0:
             raise ValueError(
                 f"video_alignment 必须是 2 的幂，当前 {self.video_alignment}"

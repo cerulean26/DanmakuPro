@@ -39,20 +39,5 @@ jobs:
 
       - run: uv sync --group dev
 
-      - name: Setup test fixtures
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path source, assets/emoji, assets/gift | Out-Null
-          @'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <i>
-              <d p="0.5,1,25,16777215,0,0,0,0">测试弹幕[微笑]</d>
-              <d p="1.5,1,25,16777215,0,0,0,0">你好[大笑]</d>
-              <gift ts="2.0" giftname="小心心" giftcount="10" price="100" user="测试用户"></gift>
-              <gift ts="3.0" giftname="保时捷" giftcount="1" price="12000" user="土豪"></gift>
-          </i>
-          '@ | Out-File -Encoding utf8 source/test.xml
-          uv run python -c "from PySide6.QtGui import QImage; img=QImage(36,36,QImage.Format.Format_ARGB32); img.fill(0xFFFFFFFF); img.save('assets/emoji/微笑.png'); img.save('assets/emoji/大笑.png'); img.save('assets/gift/小心心.png'); img.save('assets/gift/保时捷.png')"
-
       - name: Run pytest
         run: uv run pytest tests/ --cov-fail-under=60

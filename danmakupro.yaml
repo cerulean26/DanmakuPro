@@ -27,7 +27,7 @@ style:
 ratio:
   max_text_rows: 8              # 文本弹幕最多显示行数
   max_gift_rows: 2              # 礼物弹幕最多显示行数
-  text_width_ratio: 0.8         # 文本弹幕最大宽度比例
+  text_width_ratio: 0.825       # 文本弹幕最大宽度比例
   bottom_margin: 22             # 底部边距（像素）
 
 # =============================================================================
@@ -60,8 +60,7 @@ animation:
 # =============================================================================
 # system:
 #   pipe_buffer_size: 10000000   # 管道缓冲区大小（字节）
-#   pipe_queue_size: 16          # 异步写入队列大小
 #   ffmpeg_timeout: 10           # FFmpeg 启动超时（秒）
 #   stderr_thread_timeout: 5     # 错误日志线程超时（秒）
 #   video_alignment: 16           # 视频编码对齐字节数
-#   max_queue_frames: 64         # 异步写入队列最大帧数
+#   assets_dir: "assets"         # Emoji/礼物图片资源目录

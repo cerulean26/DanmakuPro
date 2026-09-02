@@ -14,8 +14,6 @@ from ..config.models import DEFAULT_CONFIG
 from ..input.event import DanmakuEvent
 from ..utils import extract_emoji_names
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-
 # 核心字体族：按优先级排列，所有 Windows 10+ 系统均自带
 _CORE_FAMILIES: list[str] = [
     "Microsoft YaHei",
@@ -65,7 +63,11 @@ def load_image_assets(
 class AssetLoader:
     """资源加载器"""
 
-    def __init__(self, font_size: int = DEFAULT_CONFIG.style.font_size):
+    def __init__(
+        self,
+        font_size: int = DEFAULT_CONFIG.style.font_size,
+        assets_dir: str | Path = "assets",
+    ):
         self.emoji_cache: dict[str, QImage] = {}
         self.gift_cache: dict[str, QImage] = {}
         self.bg_color = QColor(20, 20, 20, 127)
@@ -77,8 +79,8 @@ class AssetLoader:
         self._loaded_families: list[str] = []
         self._init_fonts()
 
-        self.emoji_dir = _PROJECT_ROOT / "assets" / "emoji"
-        self.gift_dir = _PROJECT_ROOT / "assets" / "gift"
+        self.emoji_dir = Path(assets_dir) / "emoji"
+        self.gift_dir = Path(assets_dir) / "gift"
 
     def _init_fonts(self) -> None:
         """初始化核心字体族"""
