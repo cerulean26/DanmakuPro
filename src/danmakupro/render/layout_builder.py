@@ -57,9 +57,6 @@ def _find_fit_len(fm: QFontMetrics, text: str, max_width: int) -> tuple[int, int
             low = mid + 1
         else:
             high = mid - 1
-    if sub_len == 0:
-        sub_len = 1
-        best_w = fm.horizontalAdvance(text[:1])
     return sub_len, best_w
 
 
@@ -275,10 +272,14 @@ class DanmakuLayoutBuilder:
         """
         raw_segments: list[RenderSegment] = []
 
-        prefix = event.user + ': '
         raw_segments.append(RenderSegment(
-            'text', prefix, self.fm.horizontalAdvance(prefix), COLOR_NORMAL_PREFIX
+            'text', event.user, self.fm.horizontalAdvance(event.user), COLOR_NORMAL_PREFIX
         ))
+        raw_segments.append(RenderSegment('spacing', '', 5, None))
+        raw_segments.append(RenderSegment(
+            'text', ':', self.fm.horizontalAdvance(':'), COLOR_NORMAL_PREFIX
+        ))
+        raw_segments.append(RenderSegment('spacing', '', 19, None))
 
         text = event.text
         i = 0
@@ -348,59 +349,51 @@ class DanmakuLayoutBuilder:
             current_width = 0
 
         for seg in raw_segments:
-            seg_w = seg.width
-
-            if current_width + seg_w <= self.max_content_width:
-                current_row.segments.append(seg)
-                current_width += seg_w
-                current_row.width = current_width
-                continue
-
-            if seg.type == 'text' and current_row.segments:
-                remaining_space = self.max_content_width - current_width
-                if remaining_space > 0:
-                    sub_len, best_w = _find_fit_len(self.fm, seg.content, remaining_space)
-                    if sub_len > 0:
-                        current_row.segments.append(RenderSegment(
-                            'text', seg.content[:sub_len], best_w, seg.color
-                        ))
-                        current_row.width += best_w
-                        settle_row()
-                        remaining = seg.content[sub_len:]
-                        seg = RenderSegment(
-                            'text', remaining, self.fm.horizontalAdvance(remaining), seg.color
-                        )
-                        seg_w = seg.width
-
-            settle_row()
-
             if seg.type == 'spacing':
+                if current_width + seg.width <= self.max_content_width:
+                    current_row.segments.append(seg)
+                    current_width += seg.width
+                    current_row.width = current_width
+                else:
+                    settle_row()
                 continue
 
             if seg.type in ('emoji', 'gift_image'):
-                current_row.segments.append(seg)
-                current_row.width = seg_w
-                rows.append(current_row)
-                max_row_width_seen = max(max_row_width_seen, seg_w)
-                current_row = TextRow()
-                current_width = 0
+                if current_width + seg.width <= self.max_content_width:
+                    current_row.segments.append(seg)
+                    current_width += seg.width
+                    current_row.width = current_width
+                else:
+                    settle_row()
+                    current_row.segments.append(seg)
+                    current_row.width = seg.width
+                    current_width = seg.width
                 continue
 
-            text_content = seg.content
-            text_color = seg.color
-            while text_content:
-                remaining_space = self.max_content_width - current_width
-                if remaining_space <= 0:
-                    settle_row()
-                    remaining_space = self.max_content_width
+            if seg.type == 'text':
+                text_content = seg.content
+                text_color = seg.color
+                while text_content:
+                    remaining_space = self.max_content_width - current_width
+                    if remaining_space <= 0:
+                        settle_row()
+                        continue
 
-                sub_len, best_w = _find_fit_len(self.fm, text_content, remaining_space)
-                current_row.segments.append(RenderSegment(
-                    'text', text_content[:sub_len], best_w, text_color
-                ))
-                current_row.width += best_w
-                current_width += best_w
-                text_content = text_content[sub_len:]
+                    sub_len, best_w = _find_fit_len(self.fm, text_content, remaining_space)
+                    if sub_len == 0:
+                        if current_width == 0:
+                            sub_len = 1
+                            best_w = self.fm.horizontalAdvance(text_content[:1])
+                        else:
+                            settle_row()
+                            continue
+
+                    current_row.segments.append(RenderSegment(
+                        'text', text_content[:sub_len], best_w, text_color
+                    ))
+                    current_row.width += best_w
+                    current_width += best_w
+                    text_content = text_content[sub_len:]
 
         settle_row()
         return rows, max_row_width_seen

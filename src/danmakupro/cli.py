@@ -58,10 +58,10 @@ def main() -> None:
         )
     except DanmakuProError as e:
         logger.error(f"[{e.category.value}] {e}")
-        return
+        raise SystemExit(1)
     except Exception as e:
         handle_error(e, component="cli", operation="create_burner")
-        return
+        raise SystemExit(1)
     logger.info(f"开始处理: {args.video}")
     # 捕获处理Burner时的异常，避免程序崩溃
     try:

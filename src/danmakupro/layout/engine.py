@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ..input.event import DanmakuEvent
     from .active import ActiveDanmaku
     from ..render.assets import AssetLoader
+    from ..render.layout_builder import DanmakuLayoutBuilder
 
 from PySide6.QtGui import QImage
 
@@ -24,7 +25,8 @@ from .params import LayoutParams, LayerParams
 class LayoutContext:
     """布局上下文"""
     animation: AnimationParams = field(default_factory=lambda: DEFAULT_CONFIG.animation)
-    event_idx: int = 0
+    text_event_idx: int = 0
+    gift_event_idx: int = 0
     # 上次发射文本弹幕的时间。0.0 表示尚未发射过。
     last_text_spawn_time: float = 0.0
     # 上次发射礼物弹幕的时间。0.0 表示尚未发射过。
@@ -87,126 +89,110 @@ class LayoutEngine:
         return layout_params, layer_params
 
     @staticmethod
-    def preload_danmaku_objects(
-        events: list['DanmakuEvent'],
-        layout_params: LayoutParams,
-        asset_provider: 'AssetLoader',
-        style: LayoutStyle = DEFAULT_CONFIG.style,
-    ) -> list['ActiveDanmaku']:
-        """预创建弹幕对象（懒加载模式）。
-
-        使用 DanmakuLayoutBuilder 批量构建布局，再创建 ActiveDanmaku。
-        创建对象但不立即渲染，等到首次激活时才调用 pre_render。
-        """
-        from .active import ActiveDanmaku
-        from ..render.layout_builder import DanmakuLayoutBuilder
-
-        builder = DanmakuLayoutBuilder(
-            fm=asset_provider.fm,
-            emoji_cache=asset_provider.emoji_cache,
-            gift_cache=asset_provider.gift_cache,
-            max_content_width=layout_params.text_w,
-            line_height=asset_provider.line_height,
-            style=style,
-        )
-
-        pool: list[ActiveDanmaku] = []
-        for event in events:
-            layout = builder.build(event)
-            dm = ActiveDanmaku(event=event, layout=layout, x=style.danmaku_x)
-            pool.append(dm)
-
-        return pool
-
-    @staticmethod
     def spawn_new_danmakus(
         ctx: LayoutContext,
         current_time: float,
-        danmaku_pool: list['ActiveDanmaku'],
+        event_pool: list['DanmakuEvent'],
         active_text: list['ActiveDanmaku'],
         active_gift: list['ActiveDanmaku'],
+        layout_builder: 'DanmakuLayoutBuilder',
         asset_provider: 'AssetLoader',
+        style: LayoutStyle = DEFAULT_CONFIG.style,
     ) -> tuple[bool, bool, int, int]:
-        """根据当前时间生成新弹幕。
+        """根据当前时间按需生成新弹幕（惰性创建模式）。
+
+        只扫描原始 DanmakuEvent 列表，弹幕对象在发射时按需构建，
+        避免预创建所有 ActiveDanmaku 带来的内存压力。
+
+        文本和礼物使用独立的 event_idx，互不阻塞：
+        文本积压不会挡住排在后面的礼物，反之亦然。
 
         无积压时（待处理量 <= batch_size）立即发射，无需等待间隔；
         有积压时启用时间窗口和批次限制，平滑弹幕密度。
         Returns:
             (text_has_new, gift_has_new, text_emitted, gift_emitted)
         """
+        from .active import ActiveDanmaku
+
         animation = ctx.animation
-        event_idx = ctx.event_idx
+        pool = event_pool
+        n = len(pool)
 
-        # 扫描积压弹幕，同时按类型统计待处理数量
-        pending_end = event_idx
-        pending_text = 0
-        pending_gift = 0
-        for i in range(event_idx, len(danmaku_pool)):
-            if danmaku_pool[i].event.time > current_time:
+        # ── 文本弹幕：独立扫描 ──────────────────────────────
+        text_pending = 0
+        text_scan_end = ctx.text_event_idx
+        for i in range(ctx.text_event_idx, n):
+            if pool[i].time > current_time:
                 break
-            if danmaku_pool[i].event.is_gift:
-                pending_gift += 1
-            else:
-                pending_text += 1
-            pending_end = i + 1
+            if not pool[i].is_gift:
+                text_pending += 1
+            text_scan_end = i + 1
 
-        # 动态间隔：无积压时立即发射，有积压时检查间隔
-        # last_*_spawn_time == 0.0 表示尚未发射过，免间隔检查避免初始延迟
         text_can = (
-            pending_text <= animation.text_spawn_batch_size
+            text_pending <= animation.text_spawn_batch_size
             or ctx.last_text_spawn_time == 0.0
             or (current_time - ctx.last_text_spawn_time) >= animation.text_spawn_interval
         )
-        gift_can = (
-            pending_gift <= animation.gift_spawn_batch_size
-            or ctx.last_gift_spawn_time == 0.0
-            or (current_time - ctx.last_gift_spawn_time) >= animation.gift_spawn_interval
-        )
-
-        if not text_can and not gift_can:
-            return False, False, 0, 0
 
         text_emitted = 0
-        gift_emitted = 0
-        # 生成新弹幕
-        # 注意：当某类弹幕不能发射时（间隔未到或批次已满），
-        # 必须 break 停止扫描，而不是 continue 跳过。
-        # 因为 event_idx 是顺序推进的，跳过会导致该弹幕永久丢失。
-        while event_idx < pending_end:
-            dm = danmaku_pool[event_idx]
-            is_gift = dm.event.is_gift
-
-            if is_gift:
-                if not gift_can or gift_emitted >= animation.gift_spawn_batch_size:
-                    break
-                gift_emitted += 1
-            else:
-                if not text_can or text_emitted >= animation.text_spawn_batch_size:
-                    break
-                text_emitted += 1
-
-            # 首次激活时预渲染缓存图片
-            if dm.cached_image is None:
+        while ctx.text_event_idx < text_scan_end and text_can and text_emitted < animation.text_spawn_batch_size:
+            event = pool[ctx.text_event_idx]
+            if not event.is_gift:
+                dm = ActiveDanmaku(
+                    event=event,
+                    layout=layout_builder.build(event),
+                    x=style.danmaku_x,
+                )
                 dm.pre_render(
                     asset_provider.font,
                     asset_provider.emoji_cache,
                     asset_provider.gift_cache,
                     asset_provider.bg_color,
                 )
-
-            # 记录生成时间（用于礼物停留计时）
-            if dm.spawn_time == 0.0:
                 dm.spawn_time = current_time
-
-            if is_gift:
-                active_gift.append(dm)
-            else:
                 active_text.append(dm)
-            event_idx += 1
+                text_emitted += 1
+            ctx.text_event_idx += 1
 
-        ctx.event_idx = event_idx
         if text_emitted > 0:
             ctx.last_text_spawn_time = current_time
+
+        # ── 礼物弹幕：独立扫描 ──────────────────────────────
+        gift_pending = 0
+        gift_scan_end = ctx.gift_event_idx
+        for i in range(ctx.gift_event_idx, n):
+            if pool[i].time > current_time:
+                break
+            if pool[i].is_gift:
+                gift_pending += 1
+            gift_scan_end = i + 1
+
+        gift_can = (
+            gift_pending <= animation.gift_spawn_batch_size
+            or ctx.last_gift_spawn_time == 0.0
+            or (current_time - ctx.last_gift_spawn_time) >= animation.gift_spawn_interval
+        )
+
+        gift_emitted = 0
+        while ctx.gift_event_idx < gift_scan_end and gift_can and gift_emitted < animation.gift_spawn_batch_size:
+            event = pool[ctx.gift_event_idx]
+            if event.is_gift:
+                dm = ActiveDanmaku(
+                    event=event,
+                    layout=layout_builder.build(event),
+                    x=style.danmaku_x,
+                )
+                dm.pre_render(
+                    asset_provider.font,
+                    asset_provider.emoji_cache,
+                    asset_provider.gift_cache,
+                    asset_provider.bg_color,
+                )
+                dm.spawn_time = current_time
+                active_gift.append(dm)
+                gift_emitted += 1
+            ctx.gift_event_idx += 1
+
         if gift_emitted > 0:
             ctx.last_gift_spawn_time = current_time
 

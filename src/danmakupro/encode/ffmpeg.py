@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 
@@ -40,6 +41,13 @@ class FFmpegManager:
 
     def _resolve_encode_mode(self) -> None:
         """解析编码模式。"""
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError(
+                "未找到 FFmpeg，请先安装:\n"
+                "  Windows: winget install ffmpeg 或 scoop install ffmpeg\n"
+                "  其他系统: https://ffmpeg.org/download.html"
+            )
+
         if self.encode_mode == EncodeMode.CPU:
             self.active_pipeline = EncodeMode.CPU
             logger.info("编码模式: CPU (libx264)")
@@ -126,6 +134,12 @@ class FFmpegManager:
 
     def get_video_info(self) -> dict[str, int | float]:
         """获取视频元数据"""
+        if shutil.which("ffprobe") is None:
+            raise RuntimeError(
+                "未找到 ffprobe，请先安装 FFmpeg:\n"
+                "  Windows: winget install ffmpeg 或 scoop install ffmpeg\n"
+                "  其他系统: https://ffmpeg.org/download.html"
+            )
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height,r_frame_rate,nb_frames:format=duration",
@@ -245,16 +259,29 @@ class FFmpegManager:
         )
 
         def _read_stderr():
-            assert self.process is not None
-            assert self.process.stderr is not None
-            for line in self.process.stderr:
+            proc = self.process
+            if proc is None or proc.stderr is None:
+                return
+            for line in proc.stderr:
                 line_str = line.decode("utf-8", errors="replace").rstrip("\n\r")
-                if line_str:
+                if not line_str:
+                    continue
+                # 逐帧进度行以 DEBUG 级别记录，正常运行时不会写入文件
+                # 典型格式: "frame=  123 fps=30 q=23.0 size=... time=... bitrate=... speed=1.5x"
+                if line_str.startswith("frame="):
+                    logger.debug(line_str)
+                    continue
+                # 错误和警告按严重级别分类记录
+                lower = line_str.lower()
+                if "error" in lower:
+                    logger.error(line_str)
+                elif "warning" in lower:
+                    logger.warning(line_str)
+                else:
                     logger.debug(line_str)
 
         self.stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         self.stderr_thread.start()
-        logger.debug("FFmpeg 进程已启动")
 
     def _health_check(self) -> bool:
         """检查 FFmpeg 进程是否存活"""
@@ -312,22 +339,22 @@ class FFmpegManager:
             self.stderr_thread.join(timeout=self.system_params.stderr_thread_timeout)
 
         # 第三步：等待 FFmpeg 进程退出
-        logger.debug("等待 FFmpeg 完成编码...")
+        logger.info("等待 FFmpeg 完成编码...")
         try:
-            return_code = proc.wait(timeout=300.0)
+            return_code = proc.wait(timeout=600.0)
             if return_code == 0:
                 logger.success(f"压制完成: {self.video_out}")
             else:
                 logger.error(f"压制失败 (code={return_code})")
         except subprocess.TimeoutExpired:
-            logger.warning("FFmpeg 超时，强制终止")
+            logger.warning("FFmpeg 编码超时（600s），强制终止")
             proc.kill()
             proc.wait()
-        finally:
-            # 第四步：关闭 stderr 管道，释放资源
-            if proc.stderr:
-                try:
-                    proc.stderr.close()
-                except (OSError, BrokenPipeError):
-                    pass
-            self.process = None
+
+        # 第四步：关闭 stderr 管道，释放资源
+        if proc.stderr:
+            try:
+                proc.stderr.close()
+            except (OSError, BrokenPipeError):
+                pass
+        self.process = None

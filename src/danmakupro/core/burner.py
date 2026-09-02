@@ -5,8 +5,8 @@ DanmakuBurner 是弹幕压制的编排器，负责组合各子模块完成完整
 
 from __future__ import annotations
 
-from itertools import chain
 from pathlib import Path
+import time
 from typing import Any
 
 from loguru import logger
@@ -19,6 +19,7 @@ from ..layout.engine import LayoutEngine, LayoutContext
 from ..layout.params import LayoutParams, LayerParams
 from ..render.renderer import DanmakuRenderer
 from ..render.assets import AssetLoader
+from ..render.layout_builder import DanmakuLayoutBuilder
 from ..encode.ffmpeg import FFmpegManager
 from ..utils.validation import validate_video_input, validate_xml_input, validate_output_path
 
@@ -61,7 +62,10 @@ class DanmakuBurner:
 
         validate_output_path(self.video_out, force)
 
-        self._asset_provider = AssetLoader(font_size=self._config.style.font_size)
+        self._asset_provider = AssetLoader(
+            font_size=self._config.style.font_size,
+            assets_dir=self._config.system.assets_dir,
+        )
         self._frame_encoder = FFmpegManager(
             video_in, self.video_out, encode_mode,
             self._config.encode, self._config.system,
@@ -123,10 +127,15 @@ class DanmakuBurner:
         logger.info("[4] 计算布局参数")
 
         # Step 5
-        danmaku_pool = LayoutEngine.preload_danmaku_objects(
-            events, layout_params, self._asset_provider, style,
+        layout_builder = DanmakuLayoutBuilder(
+            fm=self._asset_provider.fm,
+            emoji_cache=self._asset_provider.emoji_cache,
+            gift_cache=self._asset_provider.gift_cache,
+            max_content_width=layout_params.text_w,
+            line_height=self._asset_provider.line_height,
+            style=style,
         )
-        logger.info(f"[5] 预创建弹幕 → {len(danmaku_pool)} 对象")
+        logger.info(f"[5] 弹幕事件就绪 → {len(events)} 事件（按需构建）")
 
         # Step 6
         ffmpeg_cmd = self._frame_encoder.build_command(fps, w, h, layer_params)
@@ -136,10 +145,8 @@ class DanmakuBurner:
         try:
             self._frame_encoder.start(ffmpeg_cmd)
             logger.info("[7] 启动 FFmpeg → 已启动")
-            # 刷新异步日志队列，避免与 tqdm 进度条输出交叠
-            logger.complete()
             self._render_loop(
-                fps, total_frames, danmaku_pool,
+                fps, total_frames, events, layout_builder,
                 layout_params, layer_params,
             )
         except KeyboardInterrupt:
@@ -149,7 +156,7 @@ class DanmakuBurner:
         except Exception as e:
             raise RuntimeError(f"压制失败: {e}") from e
         finally:
-            logger.debug("清理资源")
+            logger.info("清理资源")
             self._frame_encoder.cleanup()
 
     def _encode_frame(
@@ -182,7 +189,8 @@ class DanmakuBurner:
         self,
         fps: float,
         total_frames: int,
-        danmaku_pool: list[Any],
+        events: list[Any],
+        layout_builder: Any,
         layout_params: LayoutParams,
         layer_params: LayerParams,
     ) -> None:
@@ -190,7 +198,8 @@ class DanmakuBurner:
         Args:
             fps: 视频帧率
             total_frames: 总帧数
-            danmaku_pool: 弹幕对象池
+            events: 弹幕事件列表（按需惰性构建 ActiveDanmaku）
+            layout_builder: 弹幕布局构建器
             layout_params: 布局参数
             layer_params: 层参数
         Raises:
@@ -206,8 +215,8 @@ class DanmakuBurner:
 
         renderer = DanmakuRenderer(layer_params)
 
-        total_danmaku = len(danmaku_pool)
-        total_text_danmaku = sum(1 for d in danmaku_pool if not d.event.is_gift)
+        total_danmaku = len(events)
+        total_text_danmaku = sum(1 for e in events if not e.is_gift)
         total_gift_danmaku = total_danmaku - total_text_danmaku
 
         logger.info(
@@ -225,6 +234,7 @@ class DanmakuBurner:
         total_text_spawned = 0
         total_gift_spawned = 0
 
+        t_start = time.perf_counter()
         try:
             for frame_idx in range(total_frames):
                 current_time = frame_idx / fps
@@ -232,8 +242,8 @@ class DanmakuBurner:
                 # 弹幕逻辑
                 text_has_new, gift_has_new, text_emitted, gift_emitted = (
                     LayoutEngine.spawn_new_danmakus(
-                        layout_ctx, current_time, danmaku_pool, active_text, active_gift,
-                        self._asset_provider,
+                        layout_ctx, current_time, events, active_text, active_gift,
+                        layout_builder, self._asset_provider, self._config.style,
                     )
                 )
                 total_text_spawned += text_emitted
@@ -253,7 +263,7 @@ class DanmakuBurner:
 
                 # 渲染当前帧
                 renderer.render_frame(
-                    chain(active_text, active_gift),
+                    active_text, active_gift,
                     layout_params,
                     fade_out_zone,
                 )
@@ -267,8 +277,10 @@ class DanmakuBurner:
             pbar.close()
 
         # 仅在正常完成时输出统计（异常时不会执行到这里）
+        elapsed = time.perf_counter() - t_start
         logger.info(
-            f"完成: {total_frames} 帧, "
+            f"完成: {total_frames} 帧, {elapsed:.1f}s, "
+            f"{total_frames / elapsed:.1f} fps, "
             f"弹幕 {total_text_spawned}/{total_text_danmaku} + 礼物 {total_gift_spawned}/{total_gift_danmaku}"
         )
         if total_text_spawned < total_text_danmaku:

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
@@ -40,7 +40,8 @@ class DanmakuRenderer:
 
     def render_frame(
         self,
-        active_danmakus: Iterable[ActiveDanmaku],
+        active_text: Sequence[ActiveDanmaku],
+        active_gift: Sequence[ActiveDanmaku],
         layout_params: LayoutParams,
         fade_out_zone: float,
     ) -> None:
@@ -48,27 +49,32 @@ class DanmakuRenderer:
 
         包括淡出效果：弹幕接近屏幕顶部时逐渐透明，完全飞出时不可见。
         Args:
-            active_danmakus: 当前活跃的弹幕列表
+            active_text: 当前活跃的文本弹幕列表
+            active_gift: 当前活跃的礼物弹幕列表
             layout_params: 布局参数
             fade_out_zone: 淡出区域高度（像素）
         """
         layer_y = self._layer_params.layer_y
         self.canvas.fill(Qt.GlobalColor.transparent)  # 清空画布
 
-        for dm in active_danmakus:
+        limit = layout_params.text_top
+        threshold = layout_params.text_top + fade_out_zone
+
+        for dm in active_text:
             cy = dm.current_y
-
             alpha = 1.0
-            if not dm.event.is_gift:
-                limit = layout_params.text_top
-                threshold = layout_params.text_top + fade_out_zone
-
-                if cy < threshold:
-                    if cy + dm.height <= limit:
-                        continue
-                    alpha = (cy - limit) / fade_out_zone
-                    alpha = max(0.0, min(1.0, alpha))
+            if cy < threshold:
+                if cy + dm.height <= limit:
+                    continue
+                alpha = (cy - limit) / fade_out_zone
+                alpha = max(0.0, min(1.0, alpha))
             self.painter.setOpacity(alpha)
+            local_x = dm.x - self._layer_params.layer_x
+            local_y = int(dm.current_y) - layer_y
+            dm.render(self.painter, int(local_x), local_y)
+
+        for dm in active_gift:
+            self.painter.setOpacity(1.0)
             local_x = dm.x - self._layer_params.layer_x
             local_y = int(dm.current_y) - layer_y
             dm.render(self.painter, int(local_x), local_y)
@@ -76,8 +82,8 @@ class DanmakuRenderer:
     def get_frame_data(self) -> memoryview:
         """获取当前画布的像素数据。
 
-        PySide6 中 QImage.bits() 必须拷贝一次像素数据（无法零拷贝），
-        用 memoryview 包裹返回，避免传递给 stdin.write 时产生二次拷贝。
+        QImage.bits() 返回像素数据的拷贝，以 memoryview 包裹后传递给
+        subprocess 管道写入，避免 bytes 被再次拷贝。
 
         Returns:
             画布像素数据的 memoryview 视图

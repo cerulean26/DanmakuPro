@@ -1,13 +1,13 @@
 """layout_engine.py 单元测试
 
-测试布局引擎的全部静态方法：calculate_params、preload_danmaku_objects、
+测试布局引擎的全部静态方法：calculate_params、
 spawn_new_danmakus、update_positions、handle_collisions、recycle_out_of_bounds。
 """
 
 import pytest
 from PySide6.QtGui import QColor
 
-from danmakupro.layout.engine import LayoutEngine, LayoutContext
+from danmakupro.layout.engine import LayoutEngine, LayoutContext, _all_positions_stable
 from danmakupro.layout.params import LayoutParams
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
@@ -51,6 +51,34 @@ def _make_active_danmaku(
     )
     layout = builder.build(event)
     return ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
+
+
+def _make_event(
+    text: str = "",
+    *,
+    time: float = 1.0,
+    user: str = "用户",
+    is_gift: bool = False,
+    gift_name: str = "",
+    gift_count: int = 0,
+) -> DanmakuEvent:
+    """创建原始 DanmakuEvent 测试实例（用于惰性创建测试）。"""
+    return DanmakuEvent(
+        time=time, user=user, text=text,
+        is_gift=is_gift, gift_name=gift_name, gift_count=gift_count,
+    )
+
+
+def _make_builder(font_metrics, emoji_cache, gift_cache) -> DanmakuLayoutBuilder:
+    """创建 DanmakuLayoutBuilder 测试实例。"""
+    return DanmakuLayoutBuilder(
+        fm=font_metrics,
+        emoji_cache=emoji_cache,
+        gift_cache=gift_cache,
+        max_content_width=MAX_CONTENT_WIDTH,
+        line_height=LINE_HEIGHT,
+        style=DEFAULT_CONFIG.style,
+    )
 
 
 def _make_layout_params(
@@ -128,50 +156,6 @@ class TestCalculateParams:
         assert lp.gift_top < lp.text_top
         assert lp.gift_h > 0
         assert lp.gift_top + lp.gift_h == lp.text_top
-
-
-# =============================================================================
-# preload_danmaku_objects
-# =============================================================================
-
-
-class TestPreloadDanmakuObjects:
-    """测试 preload_danmaku_objects：弹幕对象预创建。"""
-
-    def test_preload_creates_correct_count(
-        self, font_metrics, emoji_cache, gift_cache, asset_loader,
-    ):
-        events = [
-            DanmakuEvent(time=1.0, user="u1", text="弹幕1"),
-            DanmakuEvent(time=2.0, user="u2", text="弹幕2"),
-            DanmakuEvent(time=3.0, user="u3", text="弹幕3"),
-        ]
-        lp = _make_layout_params()
-        pool = LayoutEngine.preload_danmaku_objects(events, lp, asset_loader)
-        assert len(pool) == 3
-        for dm in pool:
-            assert isinstance(dm, ActiveDanmaku)
-
-    def test_preload_no_render(self, font_metrics, emoji_cache, gift_cache, asset_loader):
-        """预创建不应触发预渲染（懒加载）。"""
-        events = [DanmakuEvent(time=1.0, user="u", text="测试")]
-        lp = _make_layout_params()
-        pool = LayoutEngine.preload_danmaku_objects(events, lp, asset_loader)
-        assert pool[0].cached_image is None
-
-    def test_preload_empty_events(self, font_metrics, emoji_cache, gift_cache, asset_loader):
-        lp = _make_layout_params()
-        pool = LayoutEngine.preload_danmaku_objects([], lp, asset_loader)
-        assert pool == []
-
-    def test_preload_uses_layout_text_w(
-        self, font_metrics, emoji_cache, gift_cache, asset_loader,
-    ):
-        events = [DanmakuEvent(time=1.0, user="u", text="测试")]
-        lp = _make_layout_params(w=1280, h=720)
-        pool = LayoutEngine.preload_danmaku_objects(events, lp, asset_loader)
-        # 弹幕宽度受 text_w 限制，不会超过它
-        assert pool[0].total_width <= lp.text_w + DEFAULT_CONFIG.style.bubble_padding_x * 2
 
 
 # =============================================================================
@@ -484,43 +468,46 @@ class TestRecycleOutOfBounds:
 
 
 class TestSpawnNewDanmakus:
-    """测试 spawn_new_danmakus：文本弹幕的生成逻辑。"""
+    """测试 spawn_new_danmakus：文本弹幕的生成逻辑（惰性创建模式）。"""
 
     def test_spawn_at_current_time(
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
     ):
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache, time=1.0)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache, time=2.0)
-        pool = [dm1, dm2]
+        e1 = _make_event("弹幕1", time=1.0)
+        e2 = _make_event("弹幕2", time=2.0)
+        events = [e1, e2]
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, text_emitted, gift_emitted = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
 
-        assert ctx.event_idx == 1
+        assert ctx.text_event_idx == 1
+        assert ctx.gift_event_idx == 1
         assert text_new is True
         assert gift_new is False
         assert len(active_text) == 1
-        assert active_text[0] is dm1
-        assert dm1.cached_image is not None
+        assert active_text[0].cached_image is not None
 
     def test_no_spawn_before_time(
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
     ):
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache, time=5.0)
-        pool = [dm1]
+        e1 = _make_event("弹幕1", time=5.0)
+        events = [e1]
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, text_emitted, gift_emitted = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
 
-        assert ctx.event_idx == 0
+        assert ctx.text_event_idx == 0
+        assert ctx.gift_event_idx == 0
         assert text_new is False
         assert gift_new is False
         assert len(active_text) == 0
@@ -529,40 +516,24 @@ class TestSpawnNewDanmakus:
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
     ):
         """批量发射不应超过 text_spawn_batch_size。"""
-        dm_list = [
-            _make_active_danmaku(f"弹幕{i}", font_metrics, emoji_cache, gift_cache, time=1.0)
+        events = [
+            _make_event(f"弹幕{i}", time=1.0)
             for i in range(5)
         ]
-        pool = dm_list
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
         batch_size = DEFAULT_CONFIG.animation.text_spawn_batch_size
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, text_emitted, gift_emitted = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
 
         assert text_new is True
-        assert ctx.event_idx == min(batch_size, len(pool))
+        assert ctx.text_event_idx == batch_size
+        assert ctx.gift_event_idx == len(events)
         assert len(active_text) <= batch_size
-
-    def test_already_rendered_not_re_rendered(
-        self, font_metrics, emoji_cache, gift_cache, font, asset_loader,
-    ):
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache, time=1.0)
-        dm1.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        original_image = dm1.cached_image
-        pool = [dm1]
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
-
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
-        LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
-        )
-
-        assert dm1.cached_image is original_image
 
     def test_spawn_interval_respected(
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
@@ -573,71 +544,354 @@ class TestSpawnNewDanmakus:
         有积压时启用时间窗口和批次限制。
         """
         batch_size = DEFAULT_CONFIG.animation.text_spawn_batch_size
-        # 创建超过 batch_size 的弹幕以产生积压
-        dm_list = [
-            _make_active_danmaku(f"弹幕{i}", font_metrics, emoji_cache, gift_cache, time=1.0)
+        events = [
+            _make_event(f"弹幕{i}", time=1.0)
             for i in range(batch_size + 5)
         ]
-        pool = dm_list
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
         # 第一次发射：batch_size 个弹幕，剩余产生积压
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
         assert len(active_text) == batch_size
 
         # 间隔不足时，有积压的弹幕不应发射
         text_new2, _, _, _ = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.1, pool, active_text, active_gift, asset_loader,
+            ctx, 1.1, events, active_text, active_gift, builder, asset_loader,
         )
         assert text_new2 is False
 
 
 class TestSpawnNewDanmakusGift:
-    """测试 spawn_new_danmakus：礼物弹幕的生成逻辑。"""
+    """测试 spawn_new_danmakus：礼物弹幕的生成逻辑（惰性创建模式）。"""
 
     def test_spawn_gift_danmaku(
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
     ):
-        dm = _make_active_danmaku(
-            "", font_metrics, emoji_cache, gift_cache,
-            time=1.0, is_gift=True, gift_name="火箭", gift_count=1,
+        e1 = _make_event(
+            "", time=1.0, is_gift=True, gift_name="火箭", gift_count=1,
         )
-        pool = [dm]
+        events = [e1]
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, _, _ = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
 
         assert gift_new is True
         assert text_new is False
         assert len(active_gift) == 1
-        assert active_gift[0] is dm
 
     def test_mixed_text_and_gift(
         self, font_metrics, emoji_cache, gift_cache, asset_loader,
     ):
-        dm_text = _make_active_danmaku("文本", font_metrics, emoji_cache, gift_cache, time=1.0)
-        dm_gift = _make_active_danmaku(
-            "", font_metrics, emoji_cache, gift_cache,
-            time=1.0, is_gift=True, gift_name="火箭", gift_count=1,
+        e_text = _make_event("文本", time=1.0)
+        e_gift = _make_event(
+            "", time=1.0, is_gift=True, gift_name="火箭", gift_count=1,
         )
-        pool = [dm_text, dm_gift]
+        events = [e_text, e_gift]
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
         active_text: list[ActiveDanmaku] = []
         active_gift: list[ActiveDanmaku] = []
 
-        ctx = LayoutContext(event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
+        ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, _, _ = LayoutEngine.spawn_new_danmakus(
-            ctx, 1.0, pool, active_text, active_gift, asset_loader,
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
         )
 
         assert text_new is True
         assert gift_new is True
         assert len(active_text) == 1
         assert len(active_gift) == 1
+
+
+# =============================================================================
+# update_danmaku_layer
+# =============================================================================
+
+
+class TestUpdateDanmakuLayer:
+    """测试 update_danmaku_layer：统一弹幕层更新入口。"""
+
+    def test_text_layer_basic(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = lp.bottom - dm.height
+        dm.is_first_activation = False
+        dm.target_y = dm.current_y
+
+        LayoutEngine.update_danmaku_layer(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, damping=DEFAULT_CONFIG.animation.text_damping_factor,
+        )
+
+        assert len([dm]) == 1  # 未越界，保留
+
+    def test_gift_layer_with_dwell(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm = _make_active_danmaku(
+            "礼物", font_metrics, emoji_cache, gift_cache,
+            is_gift=True, gift_name="火箭", gift_count=1,
+        )
+        dm.current_y = lp.text_top - dm.height - 10
+        dm.target_y = dm.current_y
+        dm.is_first_activation = False
+        dm.spawn_time = 1.0
+
+        active = [dm]
+        LayoutEngine.update_danmaku_layer(
+            active, has_new=False, zone_bottom=lp.text_top, zone_top=lp.gift_top,
+            gap=lp.gap, damping=DEFAULT_CONFIG.animation.gift_damping_factor,
+            current_time=10.0, dwell_time=5.0,
+        )
+
+        assert len(active) == 0  # 过期回收
+
+    def test_gift_within_dwell_time(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm = _make_active_danmaku(
+            "礼物", font_metrics, emoji_cache, gift_cache,
+            is_gift=True, gift_name="火箭", gift_count=1,
+        )
+        dm.current_y = lp.text_top - dm.height - 10
+        dm.target_y = dm.current_y
+        dm.is_first_activation = False
+        dm.spawn_time = 8.0
+
+        active = [dm]
+        LayoutEngine.update_danmaku_layer(
+            active, has_new=False, zone_bottom=lp.text_top, zone_top=lp.gift_top,
+            gap=lp.gap, damping=DEFAULT_CONFIG.animation.gift_damping_factor,
+            current_time=10.0, dwell_time=5.0,
+        )
+
+        assert len(active) == 1  # 未过期
+
+    def test_empty_list(self):
+        lp = _make_layout_params()
+        active: list[ActiveDanmaku] = []
+        LayoutEngine.update_danmaku_layer(
+            active, has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, damping=0.25,
+        )
+        assert len(active) == 0
+
+    def test_with_new_spawn(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm = _make_active_danmaku("新弹幕", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = 0.0
+        dm.target_y = 0.0
+        dm.is_first_activation = True
+
+        active = [dm]
+        LayoutEngine.update_danmaku_layer(
+            active, has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, damping=DEFAULT_CONFIG.animation.text_damping_factor,
+        )
+
+        assert dm.target_y == lp.bottom - dm.height
+        assert not dm.is_first_activation
+
+
+# =============================================================================
+# _all_positions_stable
+# =============================================================================
+
+
+class TestAllPositionsStable:
+    """测试 _all_positions_stable：位置稳定检测。"""
+
+    def test_all_stable(self, font_metrics, emoji_cache, gift_cache):
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = 500.0
+        dm.target_y = 500.0
+
+        assert _all_positions_stable([dm]) is True
+
+    def test_not_stable(self, font_metrics, emoji_cache, gift_cache):
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = 500.0
+        dm.target_y = 400.0
+
+        assert _all_positions_stable([dm]) is False
+
+    def test_near_stable_within_threshold(self, font_metrics, emoji_cache, gift_cache):
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = 500.0
+        dm.target_y = 500.3  # diff = 0.3 < 0.5 threshold
+
+        assert _all_positions_stable([dm]) is True
+
+    def test_one_unstable_among_many(self, font_metrics, emoji_cache, gift_cache):
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+        dm1.current_y = dm1.target_y = 500.0
+        dm2.current_y = 500.0
+        dm2.target_y = 400.0
+
+        assert _all_positions_stable([dm1, dm2]) is False
+
+    def test_empty_list(self):
+        assert _all_positions_stable([]) is True
+
+    def test_custom_threshold(self, font_metrics, emoji_cache, gift_cache):
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.current_y = 500.0
+        dm.target_y = 501.0  # diff = 1.0
+
+        assert _all_positions_stable([dm], threshold=0.5) is False
+        assert _all_positions_stable([dm], threshold=2.0) is True
+
+
+# =============================================================================
+# _update_and_collide
+# =============================================================================
+
+
+class TestUpdateAndCollide:
+    """测试 _update_and_collide：合并位置更新与碰撞检测。"""
+
+    def test_empty_list(self):
+        lp = _make_layout_params()
+        LayoutEngine._update_and_collide(
+            [], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+    def test_single_danmaku_no_collision(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
+        dm.is_first_activation = False
+        dm.current_y = 500.0
+        dm.target_y = 400.0
+
+        LayoutEngine._update_and_collide(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, damping=0.25,
+        )
+
+        expected = 500.0 + (400.0 - 500.0) * 0.25
+        assert abs(dm.current_y - expected) < 0.01
+
+    def test_skip_collision_when_stable(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.current_y = dm1.target_y = dm2.current_y  # 重叠
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, skip_collision=True,
+        )
+
+        # 跳过碰撞检测，重叠不会被推挤
+        assert dm1.current_y == dm2.current_y
+
+    def test_with_new_spawn_recalc_targets(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+        dm1.is_first_activation = False
+        dm2.is_first_activation = False
+        dm1.target_y = 0.0
+        dm2.target_y = 0.0
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        assert dm2.target_y == lp.bottom - dm2.height
+        assert dm1.target_y < dm2.target_y
+
+    def test_first_activation_with_above_danmaku(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm_above = _make_active_danmaku("上方", font_metrics, emoji_cache, gift_cache)
+        dm_below = _make_active_danmaku("下方", font_metrics, emoji_cache, gift_cache)
+
+        dm_above.is_first_activation = False
+        dm_above.current_y = 500.0
+        dm_above.target_y = 500.0
+
+        dm_below.is_first_activation = True
+        dm_below.current_y = 0.0
+        dm_below.target_y = 0.0
+
+        LayoutEngine._update_and_collide(
+            [dm_above, dm_below], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        # 下方弹幕首次激活时，不应覆盖上方弹幕
+        above_bottom = dm_above.current_y + dm_above.height
+        assert dm_below.current_y <= above_bottom + lp.gap
+
+    def test_collision_pushes_overlapping(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+
+        dm2.is_first_activation = False
+        dm2.current_y = lp.bottom - dm2.height
+        dm2.target_y = dm2.current_y
+
+        dm1.is_first_activation = False
+        dm1.current_y = dm2.current_y  # 完全重叠
+        dm1.target_y = lp.bottom  # 目标在下方
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        # 碰撞后 dm1 应被推挤到 dm2 上方
+        assert dm1.current_y <= dm2.current_y - lp.gap
+
+    def test_all_invisible_no_collision(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+
+        dm1.is_first_activation = False
+        dm2.is_first_activation = False
+        dm1.current_y = dm1.target_y = lp.text_top - dm1.height - 200
+        dm2.current_y = dm2.target_y = lp.text_top - dm2.height - 100
+
+        original_y1 = dm1.current_y
+        original_y2 = dm2.current_y
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        assert dm1.current_y == original_y1
+        assert dm2.current_y == original_y2

@@ -27,7 +27,7 @@ def configure_logger() -> None:
     """配置 loguru 日志。
 
     - stderr：彩色输出，INFO 级别，供用户实时查看进度
-    - 文件：ffmpeg.log，DEBUG 级别，含源码位置，供故障排查
+    - 文件：ffmpeg.log，INFO 级别，含源码位置，供故障排查
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
     logger.remove()
@@ -43,7 +43,7 @@ def configure_logger() -> None:
     logger.add(
         sink=str(_LOG_DIR / "ffmpeg.log"),
         format=_FILE_FORMAT,
-        level="DEBUG",
+        level="INFO",
         enqueue=True,
         rotation="10 MB",
         retention=7,
