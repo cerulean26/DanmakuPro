@@ -199,85 +199,6 @@ class LayoutEngine:
         return text_emitted > 0, gift_emitted > 0, text_emitted, gift_emitted
 
     @staticmethod
-    def update_positions(
-        active_danmakus: list['ActiveDanmaku'],
-        is_any_new_spawned: bool,
-        zone_bottom: int,
-        gap: int,
-        damping: float = 0.25,
-        position_threshold: float = 0.1,
-    ) -> None:
-        """更新所有活跃弹幕的位置。
-
-        两大职责：
-            1. 新弹幕加入时，重新计算所有弹幕的目标位置（从下往上排列）
-            2. 每帧对所有弹幕应用平滑阻尼动画（damping），实现丝滑移动
-        """
-        if is_any_new_spawned and active_danmakus:
-            last_target_y = zone_bottom
-            for dm in reversed(active_danmakus):
-                h = dm.height
-                dm.target_y = last_target_y - h
-                last_target_y = dm.target_y - gap
-                dm.is_locked_to_next = False
-
-        for dm in active_danmakus:
-            if dm.is_first_activation:
-                dm.current_y = zone_bottom - dm.height
-                dm.is_first_activation = False
-            ty = dm.target_y
-            cy = dm.current_y
-            diff = ty - cy
-            if abs(diff) > position_threshold:
-                dm.current_y = cy + diff * damping
-
-    @staticmethod
-    def handle_collisions(
-        active_danmakus: list['ActiveDanmaku'],
-        zone_top: int,
-        gap: int,
-    ) -> None:
-        """碰撞检测与处理：确保所有弹幕在物理上不重叠。
-
-        从下往上遍历可见弹幕，检查每对相邻弹幕是否重叠。如果重叠，
-        将上方的弹幕向上推挤。使用锁定机制防止弹幕在碰撞边界来回抖动。
-        """
-        n = len(active_danmakus)
-        if n <= 1:
-            return
-
-        # 跳过已经完全越界的弹幕
-        visible_start = 0
-        while visible_start < n:
-            dm = active_danmakus[visible_start]
-            if dm.current_y + dm.height <= zone_top:
-                visible_start += 1
-            else:
-                break
-
-        visible_count = n - visible_start
-        if visible_count <= 1:
-            return
-
-        for i in range(n - 2, visible_start - 1, -1):
-            curr_dm = active_danmakus[i]
-            next_dm = active_danmakus[i + 1]
-
-            if curr_dm.is_locked_to_next:
-                curr_dm.current_y = next_dm.current_y - gap - curr_dm.height
-                continue
-
-            max_physical_bottom = next_dm.current_y - gap
-            curr_bottom = curr_dm.current_y + curr_dm.height
-
-            if curr_bottom > max_physical_bottom:
-                new_y = max_physical_bottom - curr_dm.height
-                curr_dm.current_y = new_y
-                if curr_dm.target_y > new_y:
-                    curr_dm.target_y = new_y
-                    curr_dm.is_locked_to_next = True
-
-    @staticmethod
     def recycle_out_of_bounds(
         active_danmakus: list['ActiveDanmaku'],
         zone_top: int,
@@ -349,9 +270,6 @@ class LayoutEngine:
         skip_collision: bool = False,
     ) -> None:
         """合并位置更新和碰撞检测为一次遍历。
-
-        原来 update_positions + handle_collisions 需要两次遍历 active_danmakus，
-        合并后只需一次遍历即可完成位置更新 + 碰撞检测。
 
         Args:
             active_danmakus: 活跃弹幕列表

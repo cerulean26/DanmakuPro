@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
+from io import TextIOWrapper
 
 from loguru import logger
 
@@ -19,6 +21,8 @@ from ..layout.params import LayerParams
 
 class FFmpegManager:
     """FFmpeg 进程管理器"""
+
+    _SPEED_RE = re.compile(r'speed=\s*([\d.]+)x')
 
     def __init__(
         self,
@@ -36,8 +40,20 @@ class FFmpegManager:
         self.active_pipeline: str = EncodeMode.CPU
         self.process: subprocess.Popen | None = None
         self.stderr_thread: threading.Thread | None = None
+        self._speed_lock = threading.Lock()
+        self._current_speed: float = 0.0
 
         self._resolve_encode_mode()
+
+    @property
+    def current_speed(self) -> float:
+        """当前编码速度（相对于实时播放的倍数）。
+
+        1.0x = 实时，2.0x = 两倍速，0.5x = 需要两倍时间。
+        线程安全，可从渲染主线程读取。
+        """
+        with self._speed_lock:
+            return self._current_speed
 
     def _resolve_encode_mode(self) -> None:
         """解析编码模式。"""
@@ -262,16 +278,19 @@ class FFmpegManager:
             proc = self.process
             if proc is None or proc.stderr is None:
                 return
-            for line in proc.stderr:
-                line_str = line.decode("utf-8", errors="replace").rstrip("\n\r")
+            stderr_text = TextIOWrapper(
+                proc.stderr, encoding="utf-8", errors="replace",
+            )
+            for line in stderr_text:
+                line_str = line.rstrip("\n\r")
                 if not line_str:
                     continue
-                # 逐帧进度行以 DEBUG 级别记录，正常运行时不会写入文件
-                # 典型格式: "frame=  123 fps=30 q=23.0 size=... time=... bitrate=... speed=1.5x"
                 if line_str.startswith("frame="):
-                    logger.debug(line_str)
+                    m = FFmpegManager._SPEED_RE.search(line_str)
+                    if m:
+                        with self._speed_lock:
+                            self._current_speed = float(m.group(1))
                     continue
-                # 错误和警告按严重级别分类记录
                 lower = line_str.lower()
                 if "error" in lower:
                     logger.error(line_str)
@@ -339,7 +358,6 @@ class FFmpegManager:
             self.stderr_thread.join(timeout=self.system_params.stderr_thread_timeout)
 
         # 第三步：等待 FFmpeg 进程退出
-        logger.info("等待 FFmpeg 完成编码...")
         try:
             return_code = proc.wait(timeout=600.0)
             if return_code == 0:

@@ -62,7 +62,6 @@ def main() -> None:
     except Exception as e:
         handle_error(e, component="cli", operation="create_burner")
         raise SystemExit(1)
-    logger.info(f"开始处理: {args.video}")
     # 捕获处理Burner时的异常，避免程序崩溃
     try:
         burner.run()

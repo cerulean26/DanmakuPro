@@ -70,8 +70,10 @@ def validate_output_path(video_out: str, force: bool = False) -> None:
         raise InputError(f"不支持的输出格式: {path.suffix}")
     if path.exists():
         if not force:
-            raise InputError(
+            response = input(
                 f"输出文件已存在: {video_out}\n"
-                f"使用 --force 参数强制覆盖，或指定其他输出路径"
-            )
+                f"是否覆盖? [y/n]: "
+            ).strip().lower()
+            if response not in ('y', 'yes'):
+                raise InputError(f"输出文件已存在: {video_out}")
         logger.warning(f"输出文件已存在，将被覆盖: {video_out}")

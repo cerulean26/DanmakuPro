@@ -35,10 +35,6 @@ class ActiveDanmaku:
         'layout', 'is_locked_to_next', 'is_first_activation', 'spawn_time',
     ]
 
-    COLOR_NORMAL_PREFIX = QColor(135, 206, 250)
-    COLOR_WHITE = QColor(255, 255, 255)
-    COLOR_GIFT_TEXT = QColor(255, 255, 150)
-
     def __init__(
         self,
         event: DanmakuEvent,
