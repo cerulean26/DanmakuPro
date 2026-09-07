@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
 from danmakupro.render.segments import RenderSegment, TextRow
-from danmakupro.render.layout_builder import DanmakuLayoutBuilder
+from danmakupro.render.layout_builder import DanmakuLayoutBuilder, COLOR_GIFT_TEXT
 from danmakupro.config import DEFAULT_CONFIG
 
 style = DEFAULT_CONFIG.style
@@ -144,7 +144,7 @@ class TestActiveDanmakuGift:
         dm = _make_danmaku("", font_metrics, emoji_cache, gift_cache,
                            is_gift=True, gift_name="火箭", gift_count=1)
         colors = [seg.color for seg in dm.rows[0].segments if seg.color is not None]
-        assert any(c == ActiveDanmaku.COLOR_GIFT_TEXT for c in colors)
+        assert any(c == COLOR_GIFT_TEXT for c in colors)
 
 
 # =============================================================================

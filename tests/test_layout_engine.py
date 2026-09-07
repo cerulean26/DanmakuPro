@@ -1,7 +1,7 @@
 """layout_engine.py 单元测试
 
 测试布局引擎的全部静态方法：calculate_params、
-spawn_new_danmakus、update_positions、handle_collisions、recycle_out_of_bounds。
+spawn_new_danmakus、_update_and_collide、recycle_out_of_bounds。
 """
 
 import pytest
@@ -159,12 +159,14 @@ class TestCalculateParams:
 
 
 # =============================================================================
-# update_positions
+# _update_and_collide（合并了原 update_positions + handle_collisions 的测试）
 # =============================================================================
 
 
-class TestUpdatePositions:
-    """测试 update_positions：目标位置计算与阻尼动画。"""
+class TestUpdateAndCollide:
+    """测试 _update_and_collide：合并位置更新与碰撞检测。"""
+
+    # ── 位置更新 ──────────────────────────────────────────
 
     def test_new_spawned_sets_target_from_bottom(
         self, font_metrics, emoji_cache, gift_cache,
@@ -175,7 +177,10 @@ class TestUpdatePositions:
         dm.target_y = 0.0
         dm.is_first_activation = True
 
-        LayoutEngine.update_positions([dm], True, lp.bottom, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm.target_y == lp.bottom - dm.height
         assert not dm.is_first_activation
@@ -189,7 +194,10 @@ class TestUpdatePositions:
         dm.target_y = 0.0
         dm.is_first_activation = True
 
-        LayoutEngine.update_positions([dm], True, lp.bottom, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm.current_y == lp.bottom - dm.height
 
@@ -202,7 +210,10 @@ class TestUpdatePositions:
         dm.current_y = 500.0
         dm.target_y = 400.0
 
-        LayoutEngine.update_positions([dm], False, lp.bottom, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         expected = 500.0 + (400.0 - 500.0) * DEFAULT_CONFIG.animation.text_damping_factor
         assert abs(dm.current_y - expected) < 0.01
@@ -218,7 +229,10 @@ class TestUpdatePositions:
             dm.current_y = 0.0
             dm.target_y = 0.0
 
-        LayoutEngine.update_positions([dm1, dm2], True, lp.bottom, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm2.target_y == lp.bottom - dm2.height
         assert dm1.target_y == dm2.target_y - lp.gap - dm1.height
@@ -226,7 +240,6 @@ class TestUpdatePositions:
     def test_no_new_spawned_no_target_recalc(
         self, font_metrics, emoji_cache, gift_cache,
     ):
-        """无新弹幕时不应重新计算目标位置。"""
         lp = _make_layout_params()
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.is_first_activation = False
@@ -234,49 +247,44 @@ class TestUpdatePositions:
         dm.target_y = 200.0
         original_target = dm.target_y
 
-        LayoutEngine.update_positions([dm], False, lp.bottom, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm.target_y == original_target
-
-    def test_empty_list_no_error(self):
-        lp = _make_layout_params()
-        LayoutEngine.update_positions([], True, lp.bottom, lp.gap)
 
     def test_position_threshold_snap(
         self, font_metrics, emoji_cache, gift_cache,
     ):
-        """当 diff 小于阈值时不应移动。"""
         lp = _make_layout_params()
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.is_first_activation = False
         dm.current_y = 300.0
-        dm.target_y = 300.05  # diff = 0.05 < 0.1 threshold
+        dm.target_y = 300.05
 
-        LayoutEngine.update_positions(
-            [dm], False, lp.bottom, lp.gap,
-            position_threshold=0.1,
+        LayoutEngine._update_and_collide(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, position_threshold=0.1,
         )
 
         assert dm.current_y == 300.0
 
-
-# =============================================================================
-# handle_collisions
-# =============================================================================
-
-
-class TestHandleCollisions:
-    """测试 handle_collisions：碰撞检测与推挤。"""
+    # ── 碰撞检测 ──────────────────────────────────────────
 
     def test_no_collision_single_danmaku(
         self, font_metrics, emoji_cache, gift_cache,
     ):
         lp = _make_layout_params()
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
-        dm.current_y = lp.bottom - dm.height
+        dm.is_first_activation = False
+        dm.current_y = dm.target_y = lp.bottom - dm.height
         original_y = dm.current_y
 
-        LayoutEngine.handle_collisions([dm], lp.text_top, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm.current_y == original_y
 
@@ -287,44 +295,41 @@ class TestHandleCollisions:
         dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
         dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
 
-        dm2.current_y = lp.bottom - dm2.height
+        dm2.is_first_activation = False
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.is_first_activation = False
         dm1.current_y = dm2.current_y  # 完全重叠
         dm1.target_y = dm1.current_y
-        dm1.is_locked_to_next = False
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp.text_top, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         expected_top = dm2.current_y - lp.gap - dm1.height
         assert dm1.current_y <= expected_top + 1
 
-    def test_empty_list_no_error(self):
-        lp = _make_layout_params()
-        LayoutEngine.handle_collisions([], lp.text_top, lp.gap)
-
     def test_no_overlap_no_push(
         self, font_metrics, emoji_cache, gift_cache,
     ):
-        """不重叠的弹幕不应被推挤。"""
         lp = _make_layout_params()
         dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
         dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
 
-        dm2.current_y = lp.bottom - dm2.height
-        dm1.current_y = dm2.current_y - lp.gap - dm1.height - 10  # 有足够间距
+        dm2.is_first_activation = False
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.is_first_activation = False
+        dm1.current_y = dm1.target_y = dm2.current_y - lp.gap - dm1.height - 10
         original_y1 = dm1.current_y
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp.text_top, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm1.current_y == original_y1
 
-
-# =============================================================================
-# handle_collisions - 锁定机制
-# =============================================================================
-
-
-class TestHandleCollisionsLocking:
-    """测试 handle_collisions 的锁定机制。"""
+    # ── 锁定机制 ──────────────────────────────────────────
 
     def test_locked_danmaku_follows_next(
         self, font_metrics, emoji_cache, gift_cache,
@@ -333,50 +338,133 @@ class TestHandleCollisionsLocking:
         dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
         dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
 
-        dm2.current_y = lp.bottom - dm2.height
+        dm2.is_first_activation = False
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.is_first_activation = False
         dm1.is_locked_to_next = True
         dm1.current_y = dm2.current_y - lp.gap - dm1.height - 50
         dm1.target_y = dm1.current_y
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp.text_top, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         expected_y = dm2.current_y - lp.gap - dm1.height
         assert dm1.current_y == expected_y
 
-    def test_all_invisible_no_collision(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        """全部不可见时不应触发碰撞处理。"""
-        lp = _make_layout_params()
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
-
-        dm1.current_y = lp.text_top - dm1.height - 200
-        dm2.current_y = lp.text_top - dm2.height - 100
-        original_y1 = dm1.current_y
-        original_y2 = dm2.current_y
-
-        LayoutEngine.handle_collisions([dm1, dm2], lp.text_top, lp.gap)
-
-        assert dm1.current_y == original_y1
-        assert dm2.current_y == original_y2
-
     def test_collision_sets_lock(
         self, font_metrics, emoji_cache, gift_cache,
     ):
-        """碰撞推挤后应设置锁定标记。"""
         lp = _make_layout_params()
         dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
         dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
 
-        dm2.current_y = lp.bottom - dm2.height
+        dm2.is_first_activation = False
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.is_first_activation = False
         dm1.current_y = dm2.current_y  # 重叠
         dm1.target_y = lp.bottom  # 目标在下方
         dm1.is_locked_to_next = False
 
-        LayoutEngine.handle_collisions([dm1, dm2], lp.text_top, lp.gap)
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
 
         assert dm1.is_locked_to_next
+
+    # ── 合并方法特有测试 ─────────────────────────────────
+
+    def test_empty_list(self):
+        lp = _make_layout_params()
+        LayoutEngine._update_and_collide(
+            [], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+    def test_skip_collision_when_stable(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+        dm2.is_first_activation = False
+        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
+        dm1.is_first_activation = False
+        dm1.current_y = dm1.target_y = dm2.current_y  # 重叠
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap, skip_collision=True,
+        )
+
+        assert dm1.current_y == dm2.current_y
+
+    def test_with_new_spawn_recalc_targets(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+        dm1.is_first_activation = False
+        dm2.is_first_activation = False
+        dm1.target_y = 0.0
+        dm2.target_y = 0.0
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        assert dm2.target_y == lp.bottom - dm2.height
+        assert dm1.target_y < dm2.target_y
+
+    def test_first_activation_with_above_danmaku(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm_above = _make_active_danmaku("上方", font_metrics, emoji_cache, gift_cache)
+        dm_below = _make_active_danmaku("下方", font_metrics, emoji_cache, gift_cache)
+
+        dm_above.is_first_activation = False
+        dm_above.current_y = 500.0
+        dm_above.target_y = 500.0
+
+        dm_below.is_first_activation = True
+        dm_below.current_y = 0.0
+        dm_below.target_y = 0.0
+
+        LayoutEngine._update_and_collide(
+            [dm_above, dm_below], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        above_bottom = dm_above.current_y + dm_above.height
+        assert dm_below.current_y <= above_bottom + lp.gap
+
+    def test_all_invisible_no_collision(
+        self, font_metrics, emoji_cache, gift_cache,
+    ):
+        lp = _make_layout_params()
+        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
+        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
+
+        dm1.is_first_activation = False
+        dm2.is_first_activation = False
+        dm1.current_y = dm1.target_y = lp.text_top - dm1.height - 200
+        dm2.current_y = dm2.target_y = lp.text_top - dm2.height - 100
+
+        original_y1 = dm1.current_y
+        original_y2 = dm2.current_y
+
+        LayoutEngine._update_and_collide(
+            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            gap=lp.gap,
+        )
+
+        assert dm1.current_y == original_y1
+        assert dm2.current_y == original_y2
 
 
 # =============================================================================
@@ -756,142 +844,3 @@ class TestAllPositionsStable:
 
         assert _all_positions_stable([dm], threshold=0.5) is False
         assert _all_positions_stable([dm], threshold=2.0) is True
-
-
-# =============================================================================
-# _update_and_collide
-# =============================================================================
-
-
-class TestUpdateAndCollide:
-    """测试 _update_and_collide：合并位置更新与碰撞检测。"""
-
-    def test_empty_list(self):
-        lp = _make_layout_params()
-        LayoutEngine._update_and_collide(
-            [], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap,
-        )
-
-    def test_single_danmaku_no_collision(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
-        dm.is_first_activation = False
-        dm.current_y = 500.0
-        dm.target_y = 400.0
-
-        LayoutEngine._update_and_collide(
-            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap, damping=0.25,
-        )
-
-        expected = 500.0 + (400.0 - 500.0) * 0.25
-        assert abs(dm.current_y - expected) < 0.01
-
-    def test_skip_collision_when_stable(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
-        dm2.current_y = dm2.target_y = lp.bottom - dm2.height
-        dm1.current_y = dm1.target_y = dm2.current_y  # 重叠
-
-        LayoutEngine._update_and_collide(
-            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap, skip_collision=True,
-        )
-
-        # 跳过碰撞检测，重叠不会被推挤
-        assert dm1.current_y == dm2.current_y
-
-    def test_with_new_spawn_recalc_targets(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
-        dm1.is_first_activation = False
-        dm2.is_first_activation = False
-        dm1.target_y = 0.0
-        dm2.target_y = 0.0
-
-        LayoutEngine._update_and_collide(
-            [dm1, dm2], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap,
-        )
-
-        assert dm2.target_y == lp.bottom - dm2.height
-        assert dm1.target_y < dm2.target_y
-
-    def test_first_activation_with_above_danmaku(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm_above = _make_active_danmaku("上方", font_metrics, emoji_cache, gift_cache)
-        dm_below = _make_active_danmaku("下方", font_metrics, emoji_cache, gift_cache)
-
-        dm_above.is_first_activation = False
-        dm_above.current_y = 500.0
-        dm_above.target_y = 500.0
-
-        dm_below.is_first_activation = True
-        dm_below.current_y = 0.0
-        dm_below.target_y = 0.0
-
-        LayoutEngine._update_and_collide(
-            [dm_above, dm_below], has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap,
-        )
-
-        # 下方弹幕首次激活时，不应覆盖上方弹幕
-        above_bottom = dm_above.current_y + dm_above.height
-        assert dm_below.current_y <= above_bottom + lp.gap
-
-    def test_collision_pushes_overlapping(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
-
-        dm2.is_first_activation = False
-        dm2.current_y = lp.bottom - dm2.height
-        dm2.target_y = dm2.current_y
-
-        dm1.is_first_activation = False
-        dm1.current_y = dm2.current_y  # 完全重叠
-        dm1.target_y = lp.bottom  # 目标在下方
-
-        LayoutEngine._update_and_collide(
-            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap,
-        )
-
-        # 碰撞后 dm1 应被推挤到 dm2 上方
-        assert dm1.current_y <= dm2.current_y - lp.gap
-
-    def test_all_invisible_no_collision(
-        self, font_metrics, emoji_cache, gift_cache,
-    ):
-        lp = _make_layout_params()
-        dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
-        dm2 = _make_active_danmaku("弹幕2", font_metrics, emoji_cache, gift_cache)
-
-        dm1.is_first_activation = False
-        dm2.is_first_activation = False
-        dm1.current_y = dm1.target_y = lp.text_top - dm1.height - 200
-        dm2.current_y = dm2.target_y = lp.text_top - dm2.height - 100
-
-        original_y1 = dm1.current_y
-        original_y2 = dm2.current_y
-
-        LayoutEngine._update_and_collide(
-            [dm1, dm2], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
-            gap=lp.gap,
-        )
-
-        assert dm1.current_y == original_y1
-        assert dm2.current_y == original_y2

@@ -60,6 +60,8 @@ class DanmakuBurner:
             video_path = Path(video_in)
             self.video_out = str(video_path.parent / f"{video_path.stem}-弹幕版.mp4")
 
+        self.video_out = Path(self.video_out).as_posix()
+
         validate_output_path(self.video_out, force)
 
         self._asset_provider = AssetLoader(
@@ -74,15 +76,11 @@ class DanmakuBurner:
     def run(self) -> None:
         """执行完整的弹幕压制流程。
 
-        按顺序执行 8 个步骤：
+        按顺序执行 4 个步骤：
         1. 解析弹幕 XML
         2. 加载资源文件
         3. 获取视频元数据
-        4. 计算布局参数
-        5. 预创建弹幕对象
-        6. 构建 FFmpeg 编码命令
-        7. 启动 FFmpeg 编码器
-        8. 压制渲染
+        4. 启动 FFmpeg 编码器 + 压制渲染
 
         KeyboardInterrupt 会被捕获并输出警告，其他异常按策略处理。
         无论成功或失败，finally 块都会执行资源清理。
@@ -97,7 +95,14 @@ class DanmakuBurner:
 
         # Step 1
         events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
-        logger.info(f"[1] 解析 XML → {len(events)} 事件")
+        text_count = sum(1 for e in events if not e.is_gift)
+        t_min = events[0].time if events else 0.0
+        t_max = events[-1].time if events else 0.0
+        logger.info(
+            f"[1] 解析 XML → {len(events)} 事件"
+            f" (文本 {text_count}+礼物 {len(events) - text_count}),"
+            f" {t_min:.1f}~{t_max:.1f}s"
+        )
 
         # Step 2
         self._asset_provider.load_assets(events)
@@ -118,15 +123,16 @@ class DanmakuBurner:
         w = int(((raw_w + align - 1) // align) * align)
         h = int(((raw_h + align - 1) // align) * align)
 
-        logger.info(f"[3] 视频信息 → {raw_w}x{raw_h}, {fps:.0f}fps, {total_frames} 帧")
+        logger.info(
+            f"[3] 视频信息 → {raw_w}x{raw_h}, {fps:.0f}fps, "
+            f"{total_frames} 帧 ({total_frames / fps:.0f}s)"
+        )
 
-        # Step 4
+        # Step 4-6: 布局计算、构建器初始化、编码命令（均为瞬时操作）
         layout_params, layer_params = LayoutEngine.calculate_params(
             w, h, style, cfg.ratio, self._asset_provider.line_height,
         )
-        logger.info("[4] 计算布局参数")
 
-        # Step 5
         layout_builder = DanmakuLayoutBuilder(
             fm=self._asset_provider.fm,
             emoji_cache=self._asset_provider.emoji_cache,
@@ -135,16 +141,13 @@ class DanmakuBurner:
             line_height=self._asset_provider.line_height,
             style=style,
         )
-        logger.info(f"[5] 弹幕事件就绪 → {len(events)} 事件（按需构建）")
 
-        # Step 6
         ffmpeg_cmd = self._frame_encoder.build_command(fps, w, h, layer_params)
-        logger.info("[6] 构建编码命令")
 
-        # Step 7
+        # Step 4
         try:
             self._frame_encoder.start(ffmpeg_cmd)
-            logger.info("[7] 启动 FFmpeg → 已启动")
+            logger.info("[4] 准备就绪 → 启动 FFmpeg")
             self._render_loop(
                 fps, total_frames, events, layout_builder,
                 layout_params, layer_params,
@@ -156,7 +159,6 @@ class DanmakuBurner:
         except Exception as e:
             raise RuntimeError(f"压制失败: {e}") from e
         finally:
-            logger.info("清理资源")
             self._frame_encoder.cleanup()
 
     def _encode_frame(
@@ -184,6 +186,32 @@ class DanmakuBurner:
             pbar.update(1)
         except (BrokenPipeError, OSError, RuntimeError) as e:
             raise EncodeError(f"编码器错误 [帧 {frame_idx}]: {e}") from e
+
+    @staticmethod
+    def _warn_unspawned(
+        events: list[Any],
+        start_idx: int,
+        video_duration: float,
+        label: str,
+        spawned: int,
+        total: int,
+    ) -> None:
+        unspawned: list[Any] = []
+        is_gift = label == "礼物弹幕"
+        for i in range(start_idx, len(events)):
+            if events[i].is_gift == is_gift:
+                unspawned.append(events[i])
+
+        beyond = sum(1 for e in unspawned if e.time > video_duration)
+        blocked = len(unspawned) - beyond
+
+        parts = [f"{label}未完全发射: {spawned}/{total}"]
+        if beyond > 0:
+            parts.append(f"{beyond}条超出视频时长({video_duration:.1f}s)")
+        if blocked > 0:
+            parts.append(f"{blocked}条被批次限制阻塞")
+
+        logger.warning("; ".join(parts))
 
     def _render_loop(
         self,
@@ -215,21 +243,18 @@ class DanmakuBurner:
 
         renderer = DanmakuRenderer(layer_params)
 
-        total_danmaku = len(events)
         total_text_danmaku = sum(1 for e in events if not e.is_gift)
-        total_gift_danmaku = total_danmaku - total_text_danmaku
-
-        logger.info(
-            f"[8] 渲染 | "
-            f"弹幕 {total_danmaku} (文本 {total_text_danmaku}+礼物 {total_gift_danmaku}), "
-            f"{total_frames} 帧"
-        )
+        total_gift_danmaku = len(events) - total_text_danmaku
 
         # 强制刷新异步日志队列，确保步骤日志在 tqdm 进度条之前输出
         logger.complete()
 
-        pbar = tqdm(total=total_frames, desc="压制进度", unit="帧")
+        pbar = tqdm(
+            total=total_frames, desc="压制进度", unit="帧",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]",
+        )
 
+        SPEED_UPDATE_INTERVAL = 30
         fade_out_zone = self._config.style.fade_out_zone
         total_text_spawned = 0
         total_gift_spawned = 0
@@ -272,22 +297,30 @@ class DanmakuBurner:
                 self._encode_frame(
                     frame_encoder, renderer, pbar, frame_idx, total_frames,
                 )
+
+                if frame_idx % SPEED_UPDATE_INTERVAL == 0:
+                    speed = frame_encoder.current_speed
+                    pbar.set_postfix(
+                        {"speed": f"{speed:.1f}x" if speed > 0 else "--"}
+                    )
         finally:
             renderer.end()
             pbar.close()
 
         # 仅在正常完成时输出统计（异常时不会执行到这里）
         elapsed = time.perf_counter() - t_start
+        video_duration = total_frames / fps
         logger.info(
             f"完成: {total_frames} 帧, {elapsed:.1f}s, "
-            f"{total_frames / elapsed:.1f} fps, "
             f"弹幕 {total_text_spawned}/{total_text_danmaku} + 礼物 {total_gift_spawned}/{total_gift_danmaku}"
         )
         if total_text_spawned < total_text_danmaku:
-            logger.warning(
-                f"文本弹幕未完全发射: {total_text_spawned}/{total_text_danmaku}"
+            DanmakuBurner._warn_unspawned(
+                events, layout_ctx.text_event_idx, video_duration,
+                "文本弹幕", total_text_spawned, total_text_danmaku,
             )
         if total_gift_spawned < total_gift_danmaku:
-            logger.warning(
-                f"礼物弹幕未完全发射: {total_gift_spawned}/{total_gift_danmaku}"
+            DanmakuBurner._warn_unspawned(
+                events, layout_ctx.gift_event_idx, video_duration,
+                "礼物弹幕", total_gift_spawned, total_gift_danmaku,
             )
