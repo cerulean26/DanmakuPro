@@ -1,4 +1,4 @@
-from danmakupro.utils.helpers import extract_emoji_names, EMOJI_PATTERN
+from danmakupro.utils.helpers import extract_emoji_names, ensure_qt_app, EMOJI_PATTERN
 
 
 class TestExtractEmojiNames:
@@ -33,3 +33,14 @@ class TestEmojiPattern:
 
     def test_pattern_no_match(self):
         assert EMOJI_PATTERN.findall("abc") == []
+
+
+# =============================================================================
+# ensure_qt_app
+# =============================================================================
+
+class TestEnsureQtApp:
+
+    def test_returns_existing_qapp(self, qapp):
+        app = ensure_qt_app()
+        assert app is not None

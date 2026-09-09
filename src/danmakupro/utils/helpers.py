@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
+from typing import cast
 
-from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication
 
 
@@ -22,6 +22,4 @@ def ensure_qt_app() -> QApplication:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    if isinstance(app, QCoreApplication) and not isinstance(app, QApplication):
-        app = QApplication([])
-    return app
+    return cast(QApplication, app)

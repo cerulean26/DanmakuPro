@@ -114,3 +114,14 @@ class TestAssetLoader:
 
         assert "不存在" not in loader.emoji_cache
         assert "不存在" not in loader.gift_cache
+
+    def test_load_assets_no_emoji_no_gift(self, qapp):
+        loader = AssetLoader()
+        events = [
+            DanmakuEvent(time=0, user="u", text="hello"),
+        ]
+        loader.load_assets(events)
+
+    def test_load_fonts_for_chars(self, qapp):
+        loader = AssetLoader()
+        loader._load_fonts_for_chars({"A", "中", " "})

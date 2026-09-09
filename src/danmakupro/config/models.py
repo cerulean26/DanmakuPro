@@ -57,6 +57,10 @@ class LayoutStyle:
     emoji_spacing: int = 4
     font_size: int = 25
     fade_out_zone: float = 30.0
+    bubble_bg_color: tuple[int, int, int, int] = (20, 20, 20, 127)
+    username_color: tuple[int, int, int] = (135, 206, 250)
+    text_color: tuple[int, int, int] = (255, 255, 255)
+    gift_color: tuple[int, int, int] = (255, 255, 150)
 
     def __post_init__(self):
         _assert_non_negative(self, "bubble_padding_x", "bubble_padding_y",
@@ -65,6 +69,13 @@ class LayoutStyle:
                              "layer_width_extra", "fade_out_zone")
         _assert_positive(self, "font_size")
         _assert_non_negative(self, "bubble_multiline_radius")
+        for name in ("bubble_bg_color", "username_color", "text_color", "gift_color"):
+            v = getattr(self, name)
+            if isinstance(v, list):
+                object.__setattr__(self, name, tuple(v))
+            for c in v:
+                if not (0 <= c <= 255):
+                    raise ValueError(f"{name} 颜色分量必须在 [0, 255] 范围内，当前 {v}")
 
 
 @dataclass(frozen=True)

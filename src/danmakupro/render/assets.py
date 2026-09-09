@@ -8,7 +8,7 @@ from pathlib import Path
 from loguru import logger
 from PySide6.QtCore import Qt
 from PySide6.QtGui import (
-    QGuiApplication, QImage, QColor, QFont, QFontMetrics, QFontDatabase, QRawFont,
+    QGuiApplication, QImage, QFont, QFontMetrics, QFontDatabase, QRawFont,
 )
 from ..config.models import DEFAULT_CONFIG
 from ..input.event import DanmakuEvent
@@ -70,7 +70,6 @@ class AssetLoader:
     ):
         self.emoji_cache: dict[str, QImage] = {}
         self.gift_cache: dict[str, QImage] = {}
-        self.bg_color = QColor(20, 20, 20, 127)
         self._font_size = font_size
 
         if QGuiApplication.instance() is None:

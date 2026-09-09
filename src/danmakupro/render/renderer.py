@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 
-from ..layout.active import ActiveDanmaku
+from .active_view import ActiveDanmakuView
 from ..layout.params import LayoutParams, LayerParams
 
 
@@ -40,8 +40,8 @@ class DanmakuRenderer:
 
     def render_frame(
         self,
-        active_text: Sequence[ActiveDanmaku],
-        active_gift: Sequence[ActiveDanmaku],
+        active_text: Sequence[ActiveDanmakuView],
+        active_gift: Sequence[ActiveDanmakuView],
         layout_params: LayoutParams,
         fade_out_zone: float,
     ) -> None:

@@ -5,12 +5,12 @@ spawn_new_danmakus、_update_and_collide、recycle_out_of_bounds。
 """
 
 import pytest
-from PySide6.QtGui import QColor
 
 from danmakupro.layout.engine import LayoutEngine, LayoutContext, _all_positions_stable
 from danmakupro.layout.params import LayoutParams
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
+from danmakupro.render.active_view import ActiveDanmakuView
 from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 from danmakupro.config import DEFAULT_CONFIG
 
@@ -481,7 +481,7 @@ class TestRecycleOutOfBounds:
         lp = _make_layout_params()
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = lp.bottom - dm.height
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
 
         LayoutEngine.recycle_out_of_bounds(active, lp.text_top)
 
@@ -493,14 +493,15 @@ class TestRecycleOutOfBounds:
         lp = _make_layout_params()
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = lp.text_top - dm.height - 100
-        dm.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        assert dm.cached_image is not None
-        active = [dm]
+        view = ActiveDanmakuView(dm)
+        view.pre_render(font, emoji_cache, gift_cache, (0, 0, 0, 120))
+        assert view.cached_image is not None
+        active = [view]
 
         LayoutEngine.recycle_out_of_bounds(active, lp.text_top)
 
         assert len(active) == 0
-        assert dm.cached_image.isNull()
+        assert view.cached_image.isNull()
 
     def test_mixed_danmakus(self, font_metrics, emoji_cache, gift_cache):
         lp = _make_layout_params()
@@ -510,12 +511,12 @@ class TestRecycleOutOfBounds:
         dm_out = _make_active_danmaku("移除", font_metrics, emoji_cache, gift_cache)
         dm_out.current_y = lp.text_top - dm_out.height - 100
 
-        active = [dm_in, dm_out]
+        active = [ActiveDanmakuView(dm_in), ActiveDanmakuView(dm_out)]
 
         LayoutEngine.recycle_out_of_bounds(active, lp.text_top)
 
         assert len(active) == 1
-        assert active[0] is dm_in
+        assert active[0]._dm is dm_in
 
     def test_expired_by_dwell_time(
         self, font_metrics, emoji_cache, gift_cache,
@@ -525,7 +526,7 @@ class TestRecycleOutOfBounds:
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = lp.bottom - dm.height  # 在边界内
         dm.spawn_time = 1.0
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
 
         LayoutEngine.recycle_out_of_bounds(
             active, lp.text_top, current_time=10.0, dwell_time=5.0,
@@ -541,7 +542,7 @@ class TestRecycleOutOfBounds:
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = lp.bottom - dm.height
         dm.spawn_time = 8.0
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
 
         LayoutEngine.recycle_out_of_bounds(
             active, lp.text_top, current_time=10.0, dwell_time=5.0,
@@ -565,8 +566,8 @@ class TestSpawnNewDanmakus:
         e2 = _make_event("弹幕2", time=2.0)
         events = [e1, e2]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, text_emitted, gift_emitted = LayoutEngine.spawn_new_danmakus(
@@ -586,8 +587,8 @@ class TestSpawnNewDanmakus:
         e1 = _make_event("弹幕1", time=5.0)
         events = [e1]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, text_emitted, gift_emitted = LayoutEngine.spawn_new_danmakus(
@@ -609,8 +610,8 @@ class TestSpawnNewDanmakus:
             for i in range(5)
         ]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         batch_size = DEFAULT_CONFIG.animation.text_spawn_batch_size
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
@@ -637,8 +638,8 @@ class TestSpawnNewDanmakus:
             for i in range(batch_size + 5)
         ]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         # 第一次发射：batch_size 个弹幕，剩余产生积压
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
@@ -665,8 +666,8 @@ class TestSpawnNewDanmakusGift:
         )
         events = [e1]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, _, _ = LayoutEngine.spawn_new_danmakus(
@@ -686,8 +687,8 @@ class TestSpawnNewDanmakusGift:
         )
         events = [e_text, e_gift]
         builder = _make_builder(font_metrics, emoji_cache, gift_cache)
-        active_text: list[ActiveDanmaku] = []
-        active_gift: list[ActiveDanmaku] = []
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
 
         ctx = LayoutContext(text_event_idx=0, gift_event_idx=0, last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0)
         text_new, gift_new, _, _ = LayoutEngine.spawn_new_danmakus(
@@ -717,12 +718,13 @@ class TestUpdateDanmakuLayer:
         dm.is_first_activation = False
         dm.target_y = dm.current_y
 
+        active = [ActiveDanmakuView(dm)]
         LayoutEngine.update_danmaku_layer(
-            [dm], has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
+            active, has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
             gap=lp.gap, damping=DEFAULT_CONFIG.animation.text_damping_factor,
         )
 
-        assert len([dm]) == 1  # 未越界，保留
+        assert len(active) == 1  # 未越界，保留
 
     def test_gift_layer_with_dwell(
         self, font_metrics, emoji_cache, gift_cache,
@@ -737,7 +739,7 @@ class TestUpdateDanmakuLayer:
         dm.is_first_activation = False
         dm.spawn_time = 1.0
 
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
         LayoutEngine.update_danmaku_layer(
             active, has_new=False, zone_bottom=lp.text_top, zone_top=lp.gift_top,
             gap=lp.gap, damping=DEFAULT_CONFIG.animation.gift_damping_factor,
@@ -759,7 +761,7 @@ class TestUpdateDanmakuLayer:
         dm.is_first_activation = False
         dm.spawn_time = 8.0
 
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
         LayoutEngine.update_danmaku_layer(
             active, has_new=False, zone_bottom=lp.text_top, zone_top=lp.gift_top,
             gap=lp.gap, damping=DEFAULT_CONFIG.animation.gift_damping_factor,
@@ -770,7 +772,7 @@ class TestUpdateDanmakuLayer:
 
     def test_empty_list(self):
         lp = _make_layout_params()
-        active: list[ActiveDanmaku] = []
+        active: list[ActiveDanmakuView] = []
         LayoutEngine.update_danmaku_layer(
             active, has_new=False, zone_bottom=lp.bottom, zone_top=lp.text_top,
             gap=lp.gap, damping=0.25,
@@ -786,7 +788,7 @@ class TestUpdateDanmakuLayer:
         dm.target_y = 0.0
         dm.is_first_activation = True
 
-        active = [dm]
+        active = [ActiveDanmakuView(dm)]
         LayoutEngine.update_danmaku_layer(
             active, has_new=True, zone_bottom=lp.bottom, zone_top=lp.text_top,
             gap=lp.gap, damping=DEFAULT_CONFIG.animation.text_damping_factor,
@@ -809,21 +811,21 @@ class TestAllPositionsStable:
         dm.current_y = 500.0
         dm.target_y = 500.0
 
-        assert _all_positions_stable([dm]) is True
+        assert _all_positions_stable([ActiveDanmakuView(dm)]) is True
 
     def test_not_stable(self, font_metrics, emoji_cache, gift_cache):
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = 500.0
         dm.target_y = 400.0
 
-        assert _all_positions_stable([dm]) is False
+        assert _all_positions_stable([ActiveDanmakuView(dm)]) is False
 
     def test_near_stable_within_threshold(self, font_metrics, emoji_cache, gift_cache):
         dm = _make_active_danmaku("测试", font_metrics, emoji_cache, gift_cache)
         dm.current_y = 500.0
         dm.target_y = 500.3  # diff = 0.3 < 0.5 threshold
 
-        assert _all_positions_stable([dm]) is True
+        assert _all_positions_stable([ActiveDanmakuView(dm)]) is True
 
     def test_one_unstable_among_many(self, font_metrics, emoji_cache, gift_cache):
         dm1 = _make_active_danmaku("弹幕1", font_metrics, emoji_cache, gift_cache)
@@ -832,7 +834,7 @@ class TestAllPositionsStable:
         dm2.current_y = 500.0
         dm2.target_y = 400.0
 
-        assert _all_positions_stable([dm1, dm2]) is False
+        assert _all_positions_stable([ActiveDanmakuView(dm1), ActiveDanmakuView(dm2)]) is False
 
     def test_empty_list(self):
         assert _all_positions_stable([]) is True
@@ -842,5 +844,5 @@ class TestAllPositionsStable:
         dm.current_y = 500.0
         dm.target_y = 501.0  # diff = 1.0
 
-        assert _all_positions_stable([dm], threshold=0.5) is False
-        assert _all_positions_stable([dm], threshold=2.0) is True
+        assert _all_positions_stable([ActiveDanmakuView(dm)], threshold=0.5) is False
+        assert _all_positions_stable([ActiveDanmakuView(dm)], threshold=2.0) is True

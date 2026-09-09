@@ -7,11 +7,6 @@
 from __future__ import annotations
 
 import os
-os.environ.setdefault(
-    "QT_LOGGING_RULES",
-    "qt.qpa.fonts=false;qt.text.font.db=false",
-)
-
 import argparse
 
 from loguru import logger
@@ -27,6 +22,11 @@ from .utils.helpers import ensure_qt_app
 
 def main() -> None:
     """主入口函数"""
+    os.environ.setdefault(
+        "QT_LOGGING_RULES",
+        "qt.qpa.fonts=false;qt.text.font.db=false",
+    )
+
     parser = argparse.ArgumentParser(
         prog="danmakupro",
         description="抖音直播弹幕压制工具",

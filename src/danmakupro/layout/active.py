@@ -1,13 +1,12 @@
 """活跃弹幕节点
 
 存储当前屏幕上一条弹幕的运行时状态，由 LayoutEngine 管理生命周期。
+纯数据模型，不依赖任何 GUI 库。
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-
-from PySide6.QtGui import QColor, QImage, QPainter
 
 if TYPE_CHECKING:
     from ..input.event import DanmakuEvent
@@ -22,10 +21,11 @@ class ActiveDanmaku:
         - 持有弹幕事件和布局数据
         - 管理位置状态（current_y、target_y）
         - 越界检测 (is_out_of_bounds)
-        - 委托渲染给 DanmakuLayout
 
     段落解析、折行、尺寸计算、预渲染等构造阶段逻辑已提取至
     DanmakuLayoutBuilder 和 DanmakuLayout。
+
+    渲染相关的 Qt 操作已提取至 ActiveDanmakuView。
 
     使用 __slots__ 而非 __dict__ 以节省内存。
     """
@@ -76,32 +76,6 @@ class ActiveDanmaku:
     @property
     def radius(self) -> float:
         return self.layout.radius
-
-    @property
-    def cached_image(self) -> QImage | None:
-        return self.layout.cached_image
-
-    @cached_image.setter
-    def cached_image(self, value: QImage | None) -> None:
-        self.layout.cached_image = value
-
-    # -------------------------------------------------------------------------
-    # 渲染委托
-    # -------------------------------------------------------------------------
-
-    def pre_render(
-        self,
-        font,
-        emoji_cache: dict[str, QImage],
-        gift_cache: dict[str, QImage],
-        bg_color: QColor,
-    ) -> None:
-        """预渲染弹幕到缓存图片，委托给 DanmakuLayout。"""
-        self.layout.pre_render(font, emoji_cache, gift_cache, bg_color)
-
-    def render(self, painter: QPainter, x: int, y: int) -> None:
-        """使用缓存的预渲染图片绘制弹幕，委托给 DanmakuLayout。"""
-        self.layout.render(painter, x, y)
 
     # -------------------------------------------------------------------------
     # 越界检测

@@ -1,14 +1,22 @@
 """日志配置模块
 
 统一管理 loguru 日志的初始化配置，供 CLI 入口共用。
+
+日志目录优先级：
+    1. 环境变量 DANMAKUPRO_LOG_DIR
+    2. 项目根目录下的 logs/ 文件夹
 """
 
+import os
 import sys
 from pathlib import Path
 
 from loguru import logger
 
-_LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+_LOG_DIR = Path(
+    os.environ.get("DANMAKUPRO_LOG_DIR")
+    or (Path(__file__).resolve().parent.parent.parent / "logs")
+)
 
 _STDERR_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "

@@ -37,7 +37,6 @@ class MockAssetLoader:
     line_height: int
     emoji_cache: dict
     gift_cache: dict
-    bg_color: QColor
 
     def load_assets(self, events):
         pass
@@ -51,7 +50,6 @@ def asset_loader(font, font_metrics, emoji_cache, gift_cache):
         line_height=LINE_HEIGHT,
         emoji_cache=emoji_cache,
         gift_cache=gift_cache,
-        bg_color=QColor(20, 20, 20, 150),
     )
 
 

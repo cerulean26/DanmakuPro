@@ -1,27 +1,30 @@
 """弹幕压制核心引擎
 
-DanmakuBurner 是弹幕压制的编排器，负责组合各子模块完成完整的处理管线。
+DanmakuBurner 是弹幕压制的编排器，负责步骤串联。
+渲染管线由 RenderPipeline 负责。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
-from tqdm import tqdm
 
 from ..config.models import DanmakuConfig, DEFAULT_CONFIG, EncodeMode
-from ..errors import EncodeError, DanmakuProError
+from ..errors import DanmakuProError
 from ..input.parser import parse_xml
-from ..layout.engine import LayoutEngine, LayoutContext
-from ..layout.params import LayoutParams, LayerParams
-from ..render.renderer import DanmakuRenderer
+from ..layout.engine import LayoutEngine
 from ..render.assets import AssetLoader
 from ..render.layout_builder import DanmakuLayoutBuilder
 from ..encode.ffmpeg import FFmpegManager
 from ..utils.validation import validate_video_input, validate_xml_input, validate_output_path
+from .pipeline import RenderPipeline
+
+if TYPE_CHECKING:
+    from ..input.event import DanmakuEvent
+    from ..layout.engine import LayoutContext
 
 
 
@@ -145,12 +148,24 @@ class DanmakuBurner:
         ffmpeg_cmd = self._frame_encoder.build_command(fps, w, h, layer_params)
 
         # Step 4
+        pipeline = RenderPipeline(
+            self._frame_encoder, self._config, self._asset_provider,
+        )
+
         try:
             self._frame_encoder.start(ffmpeg_cmd)
             logger.info("[4] 准备就绪 → 启动 FFmpeg")
-            self._render_loop(
+
+            result = pipeline.run(
                 fps, total_frames, events, layout_builder,
                 layout_params, layer_params,
+            )
+
+            DanmakuBurner._report_completion_stats(
+                events, result.layout_ctx, fps, total_frames,
+                result.total_text_danmaku, result.total_gift_danmaku,
+                result.text_spawned, result.gift_spawned,
+                result.t_start,
             )
         except KeyboardInterrupt:
             logger.warning("用户中断压制")
@@ -161,42 +176,16 @@ class DanmakuBurner:
         finally:
             self._frame_encoder.cleanup()
 
-    def _encode_frame(
-        self,
-        frame_encoder: FFmpegManager,
-        renderer: DanmakuRenderer,
-        pbar: tqdm,
-        frame_idx: int,
-        total_frames: int,
-    ) -> None:
-        """提交单帧编码，处理编码错误。
-
-        Args:
-            frame_encoder: 帧编码器
-            renderer: 渲染器
-            pbar: 进度条
-            frame_idx: 当前帧索引
-            total_frames: 总帧数
-
-        Raises:
-            EncodeError: 编码器错误且策略为中止
-        """
-        try:
-            frame_encoder.submit_frame(renderer.get_frame_data())
-            pbar.update(1)
-        except (BrokenPipeError, OSError, RuntimeError) as e:
-            raise EncodeError(f"编码器错误 [帧 {frame_idx}]: {e}") from e
-
     @staticmethod
     def _warn_unspawned(
-        events: list[Any],
+        events: list[DanmakuEvent],
         start_idx: int,
         video_duration: float,
         label: str,
         spawned: int,
         total: int,
     ) -> None:
-        unspawned: list[Any] = []
+        unspawned: list[DanmakuEvent] = []
         is_gift = label == "礼物弹幕"
         for i in range(start_idx, len(events)):
             if events[i].is_gift == is_gift:
@@ -213,101 +202,31 @@ class DanmakuBurner:
 
         logger.warning("; ".join(parts))
 
-    def _render_loop(
-        self,
+    @staticmethod
+    def _report_completion_stats(
+        events: list[DanmakuEvent],
+        layout_ctx: LayoutContext,
         fps: float,
         total_frames: int,
-        events: list[Any],
-        layout_builder: Any,
-        layout_params: LayoutParams,
-        layer_params: LayerParams,
+        total_text_danmaku: int,
+        total_gift_danmaku: int,
+        total_text_spawned: int,
+        total_gift_spawned: int,
+        t_start: float,
     ) -> None:
-        """渲染主循环（单线程）
+        """输出渲染完成统计信息，包括未发射弹幕警告。
+
         Args:
+            events: 弹幕事件列表
+            layout_ctx: 布局上下文（含 text_event_idx 和 gift_event_idx）
             fps: 视频帧率
             total_frames: 总帧数
-            events: 弹幕事件列表（按需惰性构建 ActiveDanmaku）
-            layout_builder: 弹幕布局构建器
-            layout_params: 布局参数
-            layer_params: 层参数
-        Raises:
-            DanmakuProError: 弹幕压制过程中发生错误
+            total_text_danmaku: 文本弹幕总数
+            total_gift_danmaku: 礼物弹幕总数
+            total_text_spawned: 实际发射的文本弹幕数
+            total_gift_spawned: 实际发射的礼物弹幕数
+            t_start: 渲染开始时间（perf_counter）
         """
-        frame_encoder = self._frame_encoder
-        anim = self._config.animation
-
-        active_text: list[Any] = []
-        active_gift: list[Any] = []
-
-        layout_ctx = LayoutContext(animation=anim)
-
-        renderer = DanmakuRenderer(layer_params)
-
-        total_text_danmaku = sum(1 for e in events if not e.is_gift)
-        total_gift_danmaku = len(events) - total_text_danmaku
-
-        # 强制刷新异步日志队列，确保步骤日志在 tqdm 进度条之前输出
-        logger.complete()
-
-        pbar = tqdm(
-            total=total_frames, desc="压制进度", unit="帧",
-            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]",
-        )
-
-        SPEED_UPDATE_INTERVAL = 30
-        fade_out_zone = self._config.style.fade_out_zone
-        total_text_spawned = 0
-        total_gift_spawned = 0
-
-        t_start = time.perf_counter()
-        try:
-            for frame_idx in range(total_frames):
-                current_time = frame_idx / fps
-
-                # 弹幕逻辑
-                text_has_new, gift_has_new, text_emitted, gift_emitted = (
-                    LayoutEngine.spawn_new_danmakus(
-                        layout_ctx, current_time, events, active_text, active_gift,
-                        layout_builder, self._asset_provider, self._config.style,
-                    )
-                )
-                total_text_spawned += text_emitted
-                total_gift_spawned += gift_emitted
-
-                LayoutEngine.update_danmaku_layer(
-                    active_text, text_has_new,
-                    layout_params.bottom, layout_params.text_top,
-                    layout_params.gap, anim.text_damping_factor,
-                )
-                LayoutEngine.update_danmaku_layer(
-                    active_gift, gift_has_new,
-                    layout_params.text_top, layout_params.gift_top,
-                    layout_params.gap, anim.gift_damping_factor,
-                    current_time, anim.gift_dwell_time,
-                )
-
-                # 渲染当前帧
-                renderer.render_frame(
-                    active_text, active_gift,
-                    layout_params,
-                    fade_out_zone,
-                )
-
-                # 编码
-                self._encode_frame(
-                    frame_encoder, renderer, pbar, frame_idx, total_frames,
-                )
-
-                if frame_idx % SPEED_UPDATE_INTERVAL == 0:
-                    speed = frame_encoder.current_speed
-                    pbar.set_postfix(
-                        {"speed": f"{speed:.1f}x" if speed > 0 else "--"}
-                    )
-        finally:
-            renderer.end()
-            pbar.close()
-
-        # 仅在正常完成时输出统计（异常时不会执行到这里）
         elapsed = time.perf_counter() - t_start
         video_duration = total_frames / fps
         logger.info(
