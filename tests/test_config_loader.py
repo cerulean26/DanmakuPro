@@ -4,7 +4,7 @@ from danmakupro.config.loader import (
     _is_dataclass_type, _warn_type_mismatch, _dict_to_config,
     _config_priority_paths, load_config,
 )
-from danmakupro.config.models import DanmakuConfig, AnimationParams, LayoutStyle
+from danmakupro.config.models import DanmakuConfig, AnimationParams, LayoutStyle, DEFAULT_CONFIG
 
 
 # =============================================================================
@@ -108,6 +108,15 @@ class TestLoadConfig:
         yaml_path.write_text("", encoding="utf-8")
         cfg = load_config(str(yaml_path))
         assert isinstance(cfg, DanmakuConfig)
+
+    def test_default_when_no_file_found(self, monkeypatch, tmp_path):
+        paths = [tmp_path / "nonexistent.yaml"]
+        monkeypatch.setattr(
+            "danmakupro.config.loader._config_priority_paths",
+            lambda *a, **kw: paths,
+        )
+        cfg = load_config()
+        assert cfg is DEFAULT_CONFIG
 
     def test_invalid_yaml_raises(self, tmp_path):
         yaml_path = tmp_path / "bad.yaml"

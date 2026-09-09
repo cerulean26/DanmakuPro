@@ -6,18 +6,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from ..config.models import LayoutStyle, LayoutRatio, AnimationParams, DEFAULT_CONFIG
 
 if TYPE_CHECKING:
     from ..input.event import DanmakuEvent
-    from .active import ActiveDanmaku
     from ..render.assets import AssetLoader
     from ..render.layout_builder import DanmakuLayoutBuilder
+    from ..render.active_view import ActiveDanmakuView
 
-from PySide6.QtGui import QImage
-
+from .active import ActiveDanmaku
 from .params import LayoutParams, LayerParams
 
 
@@ -93,8 +93,8 @@ class LayoutEngine:
         ctx: LayoutContext,
         current_time: float,
         event_pool: list['DanmakuEvent'],
-        active_text: list['ActiveDanmaku'],
-        active_gift: list['ActiveDanmaku'],
+        active_text: list['ActiveDanmakuView'],
+        active_gift: list['ActiveDanmakuView'],
         layout_builder: 'DanmakuLayoutBuilder',
         asset_provider: 'AssetLoader',
         style: LayoutStyle = DEFAULT_CONFIG.style,
@@ -112,11 +112,11 @@ class LayoutEngine:
         Returns:
             (text_has_new, gift_has_new, text_emitted, gift_emitted)
         """
-        from .active import ActiveDanmaku
-
         animation = ctx.animation
         pool = event_pool
         n = len(pool)
+
+        from ..render.active_view import ActiveDanmakuView  # 惰性导入，避免循环依赖
 
         # ── 文本弹幕：独立扫描 ──────────────────────────────
         text_pending = 0
@@ -143,14 +143,15 @@ class LayoutEngine:
                     layout=layout_builder.build(event),
                     x=style.danmaku_x,
                 )
-                dm.pre_render(
+                view = ActiveDanmakuView(dm)
+                view.pre_render(
                     asset_provider.font,
                     asset_provider.emoji_cache,
                     asset_provider.gift_cache,
-                    asset_provider.bg_color,
+                    style.bubble_bg_color,
                 )
-                dm.spawn_time = current_time
-                active_text.append(dm)
+                view.spawn_time = current_time
+                active_text.append(view)
                 text_emitted += 1
             ctx.text_event_idx += 1
 
@@ -182,14 +183,15 @@ class LayoutEngine:
                     layout=layout_builder.build(event),
                     x=style.danmaku_x,
                 )
-                dm.pre_render(
+                view = ActiveDanmakuView(dm)
+                view.pre_render(
                     asset_provider.font,
                     asset_provider.emoji_cache,
                     asset_provider.gift_cache,
-                    asset_provider.bg_color,
+                    style.bubble_bg_color,
                 )
-                dm.spawn_time = current_time
-                active_gift.append(dm)
+                view.spawn_time = current_time
+                active_gift.append(view)
                 gift_emitted += 1
             ctx.gift_event_idx += 1
 
@@ -200,13 +202,13 @@ class LayoutEngine:
 
     @staticmethod
     def recycle_out_of_bounds(
-        active_danmakus: list['ActiveDanmaku'],
+        active_danmakus: list['ActiveDanmakuView'],
         zone_top: int,
         current_time: float | None = None,
         dwell_time: float | None = None,
     ) -> None:
         """回收超出屏幕范围的弹幕，释放缓存图片以控制内存。"""
-        remaining: list['ActiveDanmaku'] = []
+        remaining: list['ActiveDanmakuView'] = []
         for dm in active_danmakus:
             out = dm.is_out_of_bounds(zone_top)
             expired = (
@@ -215,14 +217,14 @@ class LayoutEngine:
                 and (current_time - dm.spawn_time) > dwell_time
             )
             if out or expired:
-                dm.cached_image = QImage()  # 显式触发 C++ 析构，立即释放像素缓冲区
+                dm.clear_cache()
             else:
                 remaining.append(dm)
         active_danmakus[:] = remaining
 
     @staticmethod
     def update_danmaku_layer(
-        active_danmakus: list['ActiveDanmaku'],
+        active_danmakus: list['ActiveDanmakuView'],
         has_new: bool,
         zone_bottom: int,
         zone_top: int,
@@ -260,7 +262,7 @@ class LayoutEngine:
 
     @staticmethod
     def _update_and_collide(
-        active_danmakus: list['ActiveDanmaku'],
+        active_danmakus: Sequence['ActiveDanmaku | ActiveDanmakuView'],
         has_new: bool,
         zone_bottom: int,
         zone_top: int,
@@ -346,7 +348,7 @@ class LayoutEngine:
 # =============================================================================
 
 def _all_positions_stable(
-    active_danmakus: list[ActiveDanmaku],
+    active_danmakus: Sequence['ActiveDanmaku | ActiveDanmakuView'],
     threshold: float = 0.5,
 ) -> bool:
     """检查所有弹幕位置是否已稳定（目标位置与当前位置差小于阈值）。"""

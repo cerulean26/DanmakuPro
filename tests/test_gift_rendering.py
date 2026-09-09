@@ -14,6 +14,7 @@ from PySide6.QtGui import QImage
 
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
+from danmakupro.render.active_view import ActiveDanmakuView
 from danmakupro.render.segments import RenderSegment
 from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 from danmakupro.input.parser import parse_xml
@@ -122,21 +123,22 @@ class TestActiveDanmaku:
         )
         layout = builder.build(event)
         dm = ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
+        view = ActiveDanmakuView(dm)
 
-        assert dm.cached_image is None
+        assert view.cached_image is None
 
-        dm.pre_render(
+        view.pre_render(
             asset_loader.font,
             asset_loader.emoji_cache,
             asset_loader.gift_cache,
-            asset_loader.bg_color,
+            DEFAULT_CONFIG.style.bubble_bg_color,
         )
 
-        assert dm.cached_image is not None
-        assert isinstance(dm.cached_image, QImage)
-        assert not dm.cached_image.isNull()
-        assert dm.cached_image.width() == dm.total_width
-        assert dm.cached_image.height() == dm.height
+        assert view.cached_image is not None
+        assert isinstance(view.cached_image, QImage)
+        assert not view.cached_image.isNull()
+        assert view.cached_image.width() == dm.total_width
+        assert view.cached_image.height() == dm.height
 
 
 # =============================================================================
@@ -164,11 +166,12 @@ class TestGiftEndToEnd:
         )
         layout = builder.build(event)
         dm = ActiveDanmaku(event=event, layout=layout, x=DEFAULT_CONFIG.style.danmaku_x)
-        dm.pre_render(
+        view = ActiveDanmakuView(dm)
+        view.pre_render(
             asset_loader.font,
             asset_loader.emoji_cache,
             asset_loader.gift_cache,
-            asset_loader.bg_color,
+            DEFAULT_CONFIG.style.bubble_bg_color,
         )
 
         dm.current_y = 100
@@ -179,7 +182,7 @@ class TestGiftEndToEnd:
 
         renderer.canvas.fill(Qt.GlobalColor.transparent)
         renderer.painter.setOpacity(1.0)
-        dm.render(renderer.painter, int(dm.x), int(dm.current_y))
+        view.render(renderer.painter, int(dm.x), int(dm.current_y))
 
         has_content = False
         for y in range(renderer.canvas.height()):

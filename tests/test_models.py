@@ -4,13 +4,16 @@
 """
 
 import pytest
-from PySide6.QtGui import QColor
 
 from danmakupro.input.event import DanmakuEvent
 from danmakupro.layout.active import ActiveDanmaku
+from danmakupro.render.active_view import ActiveDanmakuView
 from danmakupro.render.segments import RenderSegment, TextRow
-from danmakupro.render.layout_builder import DanmakuLayoutBuilder, COLOR_GIFT_TEXT
+from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 from danmakupro.config import DEFAULT_CONFIG
+from danmakupro.config.models import (
+    LayoutStyle, LayoutRatio, AnimationParams, EncodeParams, SystemParams,
+)
 
 style = DEFAULT_CONFIG.style
 
@@ -77,13 +80,12 @@ class TestActiveDanmakuNormal:
     """测试普通文本弹幕的构建、尺寸和行属性。"""
 
     def test_basic_construction(self, font_metrics, emoji_cache, gift_cache):
-        """构造后应具有正尺寸、正确的 X 偏移和空缓存。"""
+        """构造后应具有正尺寸、正确的 X 偏移。"""
         dm = _make_danmaku("你好世界", font_metrics, emoji_cache, gift_cache)
         assert dm.event.text == "你好世界"
         assert dm.total_width > 0
         assert dm.height > 0
         assert dm.x == style.danmaku_x
-        assert dm.cached_image is None
 
     def test_has_rows(self, font_metrics, emoji_cache, gift_cache):
         """任何弹幕应至少有一行渲染行。"""
@@ -144,7 +146,7 @@ class TestActiveDanmakuGift:
         dm = _make_danmaku("", font_metrics, emoji_cache, gift_cache,
                            is_gift=True, gift_name="火箭", gift_count=1)
         colors = [seg.color for seg in dm.rows[0].segments if seg.color is not None]
-        assert any(c == COLOR_GIFT_TEXT for c in colors)
+        assert any(c == style.gift_color for c in colors)
 
 
 # =============================================================================
@@ -257,18 +259,20 @@ class TestActiveDanmakuPreRender:
     def test_pre_render_creates_image(self, font_metrics, emoji_cache, gift_cache, font):
         """预渲染应创建有效的缓存图片。"""
         dm = _make_danmaku("测试预渲染", font_metrics, emoji_cache, gift_cache)
-        assert dm.cached_image is None
-        dm.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        assert dm.cached_image is not None
-        assert not dm.cached_image.isNull()
+        view = ActiveDanmakuView(dm)
+        assert view.cached_image is None
+        view.pre_render(font, emoji_cache, gift_cache, (0, 0, 0, 120))
+        assert view.cached_image is not None
+        assert not view.cached_image.isNull()
 
     def test_pre_render_image_size(self, font_metrics, emoji_cache, gift_cache, font):
         """缓存图片尺寸应与弹幕尺寸一致。"""
         dm = _make_danmaku("测试", font_metrics, emoji_cache, gift_cache)
-        dm.pre_render(font, emoji_cache, gift_cache, QColor(0, 0, 0, 120))
-        assert dm.cached_image is not None
-        assert dm.cached_image.width() == dm.total_width
-        assert dm.cached_image.height() == dm.height
+        view = ActiveDanmakuView(dm)
+        view.pre_render(font, emoji_cache, gift_cache, (0, 0, 0, 120))
+        assert view.cached_image is not None
+        assert view.cached_image.width() == dm.total_width
+        assert view.cached_image.height() == dm.height
 
 
 # =============================================================================
@@ -292,3 +296,80 @@ class TestDataClasses:
         row = TextRow()
         assert row.segments == []
         assert row.width == 0
+
+
+# =============================================================================
+# 配置验证 — ValueError 路径
+# =============================================================================
+
+
+class TestLayoutStyleValidation:
+
+    def test_negative_padding_raises(self):
+        with pytest.raises(ValueError, match="不能为负数"):
+            LayoutStyle(bubble_padding_x=-1)
+
+    def test_zero_font_size_raises(self):
+        with pytest.raises(ValueError, match="必须 > 0"):
+            LayoutStyle(font_size=0)
+
+    def test_color_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="颜色分量必须在"):
+            LayoutStyle(bubble_bg_color=(256, 0, 0, 0))
+
+    def test_color_list_converted_to_tuple(self):
+        style = LayoutStyle(bubble_bg_color=[20, 20, 20, 127])  # type: ignore[arg-type]
+        assert isinstance(style.bubble_bg_color, tuple)
+        assert style.bubble_bg_color == (20, 20, 20, 127)
+
+
+class TestLayoutRatioValidation:
+
+    def test_negative_rows_raises(self):
+        with pytest.raises(ValueError, match="不能为负数"):
+            LayoutRatio(max_text_rows=-1)
+
+    def test_text_width_ratio_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="text_width_ratio"):
+            LayoutRatio(text_width_ratio=0)
+
+
+class TestAnimationParamsValidation:
+
+    def test_damping_factor_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="必须在"):
+            AnimationParams(text_damping_factor=1.5)
+
+    def test_negative_spawn_interval_raises(self):
+        with pytest.raises(ValueError, match="不能为负数"):
+            AnimationParams(text_spawn_interval=-1)
+
+    def test_negative_gift_dwell_time_raises(self):
+        with pytest.raises(ValueError, match="gift_dwell_time"):
+            AnimationParams(gift_dwell_time=-1)
+
+
+class TestEncodeParamsValidation:
+
+    def test_cq_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="必须在"):
+            EncodeParams(gpu_cq=52)
+
+    def test_negative_min_reserve_threads_raises(self):
+        with pytest.raises(ValueError, match="必须 > 0"):
+            EncodeParams(cpu_min_reserve_threads=0)
+
+    def test_empty_preset_raises(self):
+        with pytest.raises(ValueError, match="不能为空字符串"):
+            EncodeParams(gpu_preset="")
+
+
+class TestSystemParamsValidation:
+
+    def test_negative_buffer_size_raises(self):
+        with pytest.raises(ValueError, match="必须 > 0"):
+            SystemParams(pipe_buffer_size=0)
+
+    def test_alignment_not_power_of_two_raises(self):
+        with pytest.raises(ValueError, match="video_alignment"):
+            SystemParams(video_alignment=3)

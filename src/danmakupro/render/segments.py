@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PySide6.QtGui import QColor
-
 
 @dataclass(slots=True)
 class RenderSegment:
@@ -16,7 +14,7 @@ class RenderSegment:
     type: str
     content: str
     width: int
-    color: QColor | None = None
+    color: tuple[int, int, int] | None = None
     has_cache: bool = False
 
 

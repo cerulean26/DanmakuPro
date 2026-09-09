@@ -18,15 +18,6 @@ from .segments import RenderSegment, TextRow
 
 
 # =============================================================================
-# 颜色常量
-# =============================================================================
-
-COLOR_NORMAL_PREFIX = QColor(135, 206, 250)
-COLOR_WHITE = QColor(255, 255, 255)
-COLOR_GIFT_TEXT = QColor(255, 255, 150)
-
-
-# =============================================================================
 # 辅助函数
 # =============================================================================
 
@@ -111,7 +102,7 @@ class DanmakuLayout:
         font: QFont,
         emoji_cache: dict[str, QImage],
         gift_cache: dict[str, QImage],
-        bg_color: QColor,
+        bg_color: tuple[int, int, int, int],
     ) -> None:
         """预渲染弹幕到 QImage 缓存。
 
@@ -121,7 +112,7 @@ class DanmakuLayout:
             font: 字体对象
             emoji_cache: Emoji 图片缓存
             gift_cache: 礼物图片缓存
-            bg_color: 背景颜色（含透明度）
+            bg_color: 背景颜色 (r, g, b, a)
         """
         self.cached_image = QImage(
             self.total_width, self.height, QImage.Format.Format_ARGB32
@@ -129,7 +120,7 @@ class DanmakuLayout:
         self.cached_image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(self.cached_image)
         painter.setFont(font)
-        painter.setBrush(bg_color)
+        painter.setBrush(QColor(*bg_color))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(
             0, 0, self.total_width, self.height, self.radius, self.radius
@@ -140,7 +131,7 @@ class DanmakuLayout:
             curr_x = self.padding_x
             for seg in row.segments:
                 if seg.type == 'text':
-                    painter.setPen(seg.color)
+                    painter.setPen(QColor(*seg.color))
                     painter.drawText(curr_x, text_baseline_y, seg.content)
                 elif seg.type == 'emoji':
                     if seg.has_cache:
@@ -243,15 +234,15 @@ class DanmakuLayoutBuilder:
 
         user_prefix = f"{event.user} "
         raw_segments.append(RenderSegment(
-            'text', user_prefix, self.fm.horizontalAdvance(user_prefix), COLOR_NORMAL_PREFIX
+            'text', user_prefix, self.fm.horizontalAdvance(user_prefix), self.style.username_color
         ))
         action_text = "送出 "
         raw_segments.append(RenderSegment(
-            'text', action_text, self.fm.horizontalAdvance(action_text), COLOR_GIFT_TEXT
+            'text', action_text, self.fm.horizontalAdvance(action_text), self.style.gift_color
         ))
         raw_segments.append(RenderSegment(
             'text', event.gift_name, self.fm.horizontalAdvance(event.gift_name),
-            COLOR_GIFT_TEXT
+            self.style.gift_color
         ))
         if event.gift_name in self.gift_cache:
             raw_segments.append(RenderSegment('spacing', '', self.style.gift_spacing))
@@ -261,7 +252,7 @@ class DanmakuLayoutBuilder:
             ))
         count_text = f" x {event.gift_count} "
         raw_segments.append(RenderSegment(
-            'text', count_text, self.fm.horizontalAdvance(count_text), COLOR_GIFT_TEXT
+            'text', count_text, self.fm.horizontalAdvance(count_text), self.style.gift_color
         ))
         return raw_segments
 
@@ -273,11 +264,11 @@ class DanmakuLayoutBuilder:
         raw_segments: list[RenderSegment] = []
 
         raw_segments.append(RenderSegment(
-            'text', event.user, self.fm.horizontalAdvance(event.user), COLOR_NORMAL_PREFIX
+            'text', event.user, self.fm.horizontalAdvance(event.user), self.style.username_color
         ))
         raw_segments.append(RenderSegment('spacing', '', 5, None))
         raw_segments.append(RenderSegment(
-            'text', ':', self.fm.horizontalAdvance(':'), COLOR_NORMAL_PREFIX
+            'text', ':', self.fm.horizontalAdvance(':'), self.style.username_color
         ))
         raw_segments.append(RenderSegment('spacing', '', 19, None))
 
@@ -289,7 +280,7 @@ class DanmakuLayoutBuilder:
             if buffer:
                 merged = ''.join(buffer)
                 raw_segments.append(RenderSegment(
-                    'text', merged, self.fm.horizontalAdvance(merged), COLOR_WHITE
+                    'text', merged, self.fm.horizontalAdvance(merged), self.style.text_color
                 ))
                 buffer.clear()
 
