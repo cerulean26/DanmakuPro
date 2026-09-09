@@ -2,6 +2,7 @@
 
 用法: danmakupro video.mp4 danmaku.xml 
      danmakupro source/5.flv source/5.xml --encode gpu --config ./danmakupro.yaml -f
+     danmakupro                          (无参数启动 GUI)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ os.environ.setdefault(
 )
 
 import argparse
+import sys
 
 from loguru import logger
 from PySide6.QtWidgets import QApplication
@@ -27,6 +29,10 @@ from .utils.helpers import ensure_qt_app
 
 def main() -> None:
     """主入口函数"""
+    if len(sys.argv) == 1:
+        _run_gui()
+        return
+
     parser = argparse.ArgumentParser(
         prog="danmakupro",
         description="抖音直播弹幕压制工具",
@@ -76,6 +82,18 @@ def main() -> None:
         if app is not None:
             app.quit()
             app.deleteLater()
+
+
+def _run_gui() -> None:
+    """启动 GUI 模式"""
+    configure_logger()
+    ensure_qt_app()
+    from .gui.main_window import MainWindow
+    app = QApplication.instance()
+    assert app is not None
+    window = MainWindow()
+    window.show()
+    app.exec()
 
 
 if __name__ == "__main__":

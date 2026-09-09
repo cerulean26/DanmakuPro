@@ -42,6 +42,7 @@ class FFmpegManager:
         self.stderr_thread: threading.Thread | None = None
         self._speed_lock = threading.Lock()
         self._current_speed: float = 0.0
+        self._aborted: bool = False
 
         self._resolve_encode_mode()
 
@@ -333,13 +334,26 @@ class FFmpegManager:
         except (BrokenPipeError, OSError) as e:
             raise BrokenPipeError(f"FFmpeg 管道断开: {e}") from e
 
+    def abort(self) -> None:
+        """标记为已中断，cleanup 时将直接终止进程而非等待完成"""
+        self._aborted = True
+
+    def close_stdin(self) -> None:
+        """关闭 FFmpeg stdin，用于外部中断阻塞的写入"""
+        self._aborted = True
+        if self.process and self.process.stdin:
+            try:
+                self.process.stdin.close()
+            except (OSError, BrokenPipeError):
+                pass
+
     def cleanup(self) -> None:
         """清理资源。
 
         按顺序完成：
         1. 关闭 stdin 管道，通知 FFmpeg 输入结束
         2. 等待 stderr 线程结束（避免日志丢失）
-        3. 等待 FFmpeg 进程退出
+        3. 等待 FFmpeg 进程退出（或被中断时直接 kill）
         4. 关闭 stderr 管道，释放资源
         """
         proc = self.process
@@ -357,17 +371,24 @@ class FFmpegManager:
         if self.stderr_thread and self.stderr_thread.is_alive():
             self.stderr_thread.join(timeout=self.system_params.stderr_thread_timeout)
 
-        # 第三步：等待 FFmpeg 进程退出
-        try:
-            return_code = proc.wait(timeout=600.0)
-            if return_code == 0:
-                logger.success(f"压制完成: {self.video_out}")
-            else:
-                logger.error(f"压制失败 (code={return_code})")
-        except subprocess.TimeoutExpired:
-            logger.warning("FFmpeg 编码超时（600s），强制终止")
-            proc.kill()
-            proc.wait()
+        # 第三步：处理进程退出
+        if self._aborted:
+            try:
+                proc.kill()
+                proc.wait(timeout=5.0)
+            except Exception:
+                pass
+        else:
+            try:
+                return_code = proc.wait(timeout=600.0)
+                if return_code == 0:
+                    logger.success(f"压制完成: {self.video_out}")
+                else:
+                    logger.error(f"压制失败 (code={return_code})")
+            except subprocess.TimeoutExpired:
+                logger.warning("FFmpeg 编码超时（600s），强制终止")
+                proc.kill()
+                proc.wait()
 
         # 第四步：关闭 stderr 管道，释放资源
         if proc.stderr:
