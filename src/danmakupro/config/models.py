@@ -104,6 +104,10 @@ class AnimationParams:
     text_spawn_batch_size: int = 3
     gift_spawn_interval: float = 0.5
     gift_spawn_batch_size: int = 2
+    # 有界延迟控制：积压时的目标清空时长（秒）。基础排空速率不足以清空积压时，
+    # 临时收紧发射间隔，使弹幕显示延迟收敛到该值附近。None 表示禁用自适应，
+    # 始终使用固定的 *_spawn_interval。
+    max_spawn_latency: float | None = 2.0
     gift_dwell_time: float | None = 5.0
     min_gift_price: float = 1.0
 
@@ -115,6 +119,10 @@ class AnimationParams:
         _assert_non_negative(self, "text_spawn_interval", "gift_spawn_interval",
                              "min_gift_price")
         _assert_positive(self, "text_spawn_batch_size", "gift_spawn_batch_size")
+        if self.max_spawn_latency is not None and self.max_spawn_latency <= 0:
+            raise ValueError(
+                f"max_spawn_latency 必须 > 0 或为 null，当前 {self.max_spawn_latency}"
+            )
         if self.gift_dwell_time is not None and self.gift_dwell_time < 0:
             raise ValueError(f"gift_dwell_time 不能为负数，当前 {self.gift_dwell_time}")
 
@@ -145,6 +153,7 @@ class EncodeParams:
 class SystemParams:
     """系统参数配置"""
     pipe_buffer_size: int = 10_000_000
+    # 编码器探测与 ffprobe 的子进程超时（秒）
     ffmpeg_timeout: int = 10
     stderr_thread_timeout: int = 5
     video_alignment: int = 16

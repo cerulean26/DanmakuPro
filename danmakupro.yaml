@@ -41,10 +41,16 @@ ratio:
 animation:
   text_damping_factor: 0.25     # 文本弹幕移动阻尼系数（0~1，越大越快）
   gift_damping_factor: 0.25     # 礼物弹幕移动阻尼系数（0~1，越大越快）
-  text_spawn_interval: 0.5      # 文本弹幕发射间隔（秒）
+  text_spawn_interval: 0.5      # 文本弹幕基础发射间隔（秒）
   text_spawn_batch_size: 3      # 文本弹幕每次发射数量
-  gift_spawn_interval: 0.5      # 礼物弹幕发射间隔（秒）
+  gift_spawn_interval: 0.5      # 礼物弹幕基础发射间隔（秒）
   gift_spawn_batch_size: 2      # 礼物弹幕每次发射数量
+  # 有界延迟自适应：积压时按此目标时长收紧发射间隔（秒）。
+  # 基础排空速率 = batch_size / interval（默认 3/0.5 = 6 条/秒）；
+  # 当积压按基础速率无法在此时长内清空时，间隔自动收紧（最小到 batch_size 条/帧）。
+  # 调小 = 积压追得更快、弹幕延迟更小，但突发时密度更高；
+  # null = 禁用自适应，始终使用固定间隔。
+  max_spawn_latency: 2.0        # 有界延迟自适应目标时长（秒）
   gift_dwell_time: 5.0          # 礼物停留时间（秒），null=永不消失
   min_gift_price: 0.0           # 最低礼物价格（元），低于此值不显示
 
@@ -65,7 +71,7 @@ animation:
 # =============================================================================
 # system:
 #   pipe_buffer_size: 10000000   # 管道缓冲区大小（字节）
-#   ffmpeg_timeout: 10           # FFmpeg 启动超时（秒）
+#   ffmpeg_timeout: 10           # 编码器探测/ffprobe 子进程超时（秒）
 #   stderr_thread_timeout: 5     # 错误日志线程超时（秒）
 #   video_alignment: 16           # 视频编码对齐字节数
 #   assets_dir: "assets"         # Emoji/礼物图片资源目录
