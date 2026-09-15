@@ -2,7 +2,6 @@ from danmakupro.utils.helpers import extract_emoji_names, ensure_qt_app, EMOJI_P
 
 
 class TestExtractEmojiNames:
-
     def test_single_emoji(self):
         assert extract_emoji_names("你好[微笑]") == ["微笑"]
 
@@ -26,7 +25,6 @@ class TestExtractEmojiNames:
 
 
 class TestEmojiPattern:
-
     def test_pattern_findall(self):
         result = EMOJI_PATTERN.findall("a[微笑]b[大笑]c")
         assert result == ["微笑", "大笑"]
@@ -39,8 +37,8 @@ class TestEmojiPattern:
 # ensure_qt_app
 # =============================================================================
 
-class TestEnsureQtApp:
 
+class TestEnsureQtApp:
     def test_returns_existing_qapp(self, qapp):
         app = ensure_qt_app()
         assert app is not None

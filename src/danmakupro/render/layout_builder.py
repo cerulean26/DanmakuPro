@@ -21,9 +21,10 @@ from .segments import RenderSegment, TextRow
 # 辅助函数
 # =============================================================================
 
+
 def _strip_trailing_spacing(row: TextRow) -> None:
     """移除行尾无用的间距段（spacing 在行尾不可见，浪费空间）。"""
-    while row.segments and row.segments[-1].type == 'spacing':
+    while row.segments and row.segments[-1].type == "spacing":
         removed = row.segments.pop()
         row.width -= removed.width
 
@@ -55,6 +56,7 @@ def _find_fit_len(fm: QFontMetrics, text: str, max_width: int) -> tuple[int, int
 # DanmakuLayout - 布局数据 + 渲染
 # =============================================================================
 
+
 class DanmakuLayout:
     """弹幕布局数据：折行结果、尺寸、渲染缓存。
 
@@ -67,9 +69,17 @@ class DanmakuLayout:
     """
 
     __slots__ = [
-        'rows', 'total_width', 'height', 'padding_x', 'padding_y',
-        'line_height', 'row_gap', 'radius', 'text_ascent', 'vertical_padding',
-        'cached_image',
+        "rows",
+        "total_width",
+        "height",
+        "padding_x",
+        "padding_y",
+        "line_height",
+        "row_gap",
+        "radius",
+        "text_ascent",
+        "vertical_padding",
+        "cached_image",
     ]
 
     def __init__(
@@ -130,18 +140,22 @@ class DanmakuLayout:
             text_baseline_y = curr_row_top + self.vertical_padding + self.text_ascent
             curr_x = self.padding_x
             for seg in row.segments:
-                if seg.type == 'text':
+                if seg.type == "text":
                     painter.setPen(QColor(*seg.color))
                     painter.drawText(curr_x, text_baseline_y, seg.content)
-                elif seg.type == 'emoji':
+                elif seg.type == "emoji":
                     if seg.has_cache:
                         scaled_img = emoji_cache[seg.content]
-                        emoji_y = curr_row_top + (self.line_height - scaled_img.height()) // 2
+                        emoji_y = (
+                            curr_row_top + (self.line_height - scaled_img.height()) // 2
+                        )
                         painter.drawImage(curr_x, emoji_y, scaled_img)
-                elif seg.type == 'gift_image':
+                elif seg.type == "gift_image":
                     if seg.has_cache:
                         scaled_img = gift_cache[seg.content]
-                        gift_y = curr_row_top + (self.line_height - scaled_img.height()) // 2
+                        gift_y = (
+                            curr_row_top + (self.line_height - scaled_img.height()) // 2
+                        )
                         painter.drawImage(curr_x, gift_y, scaled_img)
                 curr_x += seg.width
         painter.end()
@@ -160,6 +174,7 @@ class DanmakuLayout:
 # =============================================================================
 # DanmakuLayoutBuilder - 布局构建器
 # =============================================================================
+
 
 class DanmakuLayoutBuilder:
     """弹幕布局构建器：将 DanmakuEvent 解析为 DanmakuLayout。
@@ -233,27 +248,50 @@ class DanmakuLayoutBuilder:
         raw_segments: list[RenderSegment] = []
 
         user_prefix = f"{event.user} "
-        raw_segments.append(RenderSegment(
-            'text', user_prefix, self.fm.horizontalAdvance(user_prefix), self.style.username_color
-        ))
+        raw_segments.append(
+            RenderSegment(
+                "text",
+                user_prefix,
+                self.fm.horizontalAdvance(user_prefix),
+                self.style.username_color,
+            )
+        )
         action_text = "送出 "
-        raw_segments.append(RenderSegment(
-            'text', action_text, self.fm.horizontalAdvance(action_text), self.style.gift_color
-        ))
-        raw_segments.append(RenderSegment(
-            'text', event.gift_name, self.fm.horizontalAdvance(event.gift_name),
-            self.style.gift_color
-        ))
+        raw_segments.append(
+            RenderSegment(
+                "text",
+                action_text,
+                self.fm.horizontalAdvance(action_text),
+                self.style.gift_color,
+            )
+        )
+        raw_segments.append(
+            RenderSegment(
+                "text",
+                event.gift_name,
+                self.fm.horizontalAdvance(event.gift_name),
+                self.style.gift_color,
+            )
+        )
         if event.gift_name in self.gift_cache:
-            raw_segments.append(RenderSegment('spacing', '', self.style.gift_spacing))
-            raw_segments.append(RenderSegment(
-                'gift_image', event.gift_name,
-                self.gift_cache[event.gift_name].width(), has_cache=True
-            ))
+            raw_segments.append(RenderSegment("spacing", "", self.style.gift_spacing))
+            raw_segments.append(
+                RenderSegment(
+                    "gift_image",
+                    event.gift_name,
+                    self.gift_cache[event.gift_name].width(),
+                    has_cache=True,
+                )
+            )
         count_text = f" x {event.gift_count} "
-        raw_segments.append(RenderSegment(
-            'text', count_text, self.fm.horizontalAdvance(count_text), self.style.gift_color
-        ))
+        raw_segments.append(
+            RenderSegment(
+                "text",
+                count_text,
+                self.fm.horizontalAdvance(count_text),
+                self.style.gift_color,
+            )
+        )
         return raw_segments
 
     def _build_text_segments(self, event: DanmakuEvent) -> list[RenderSegment]:
@@ -263,14 +301,21 @@ class DanmakuLayoutBuilder:
         """
         raw_segments: list[RenderSegment] = []
 
-        raw_segments.append(RenderSegment(
-            'text', event.user, self.fm.horizontalAdvance(event.user), self.style.username_color
-        ))
-        raw_segments.append(RenderSegment('spacing', '', 5, None))
-        raw_segments.append(RenderSegment(
-            'text', ':', self.fm.horizontalAdvance(':'), self.style.username_color
-        ))
-        raw_segments.append(RenderSegment('spacing', '', 19, None))
+        raw_segments.append(
+            RenderSegment(
+                "text",
+                event.user,
+                self.fm.horizontalAdvance(event.user),
+                self.style.username_color,
+            )
+        )
+        raw_segments.append(RenderSegment("spacing", "", 5, None))
+        raw_segments.append(
+            RenderSegment(
+                "text", ":", self.fm.horizontalAdvance(":"), self.style.username_color
+            )
+        )
+        raw_segments.append(RenderSegment("spacing", "", 19, None))
 
         text = event.text
         i = 0
@@ -278,27 +323,36 @@ class DanmakuLayoutBuilder:
 
         def flush_buffer():
             if buffer:
-                merged = ''.join(buffer)
-                raw_segments.append(RenderSegment(
-                    'text', merged, self.fm.horizontalAdvance(merged), self.style.text_color
-                ))
+                merged = "".join(buffer)
+                raw_segments.append(
+                    RenderSegment(
+                        "text",
+                        merged,
+                        self.fm.horizontalAdvance(merged),
+                        self.style.text_color,
+                    )
+                )
                 buffer.clear()
 
         while i < len(text):
-            if text[i] == '[':
-                end = text.find(']', i)
+            if text[i] == "[":
+                end = text.find("]", i)
                 if end != -1:
-                    name = text[i + 1:end]
+                    name = text[i + 1 : end]
                     if name in self.emoji_cache:
                         flush_buffer()
-                        if raw_segments and raw_segments[-1].type != 'spacing':
-                            raw_segments.append(RenderSegment(
-                                'spacing', '', self.style.emoji_spacing
-                            ))
-                        raw_segments.append(RenderSegment(
-                            'emoji', name,
-                            self.emoji_cache[name].width(), has_cache=True
-                        ))
+                        if raw_segments and raw_segments[-1].type != "spacing":
+                            raw_segments.append(
+                                RenderSegment("spacing", "", self.style.emoji_spacing)
+                            )
+                        raw_segments.append(
+                            RenderSegment(
+                                "emoji",
+                                name,
+                                self.emoji_cache[name].width(),
+                                has_cache=True,
+                            )
+                        )
                         i = end + 1
                         continue
             buffer.append(text[i])
@@ -340,7 +394,7 @@ class DanmakuLayoutBuilder:
             current_width = 0
 
         for seg in raw_segments:
-            if seg.type == 'spacing':
+            if seg.type == "spacing":
                 if current_width + seg.width <= self.max_content_width:
                     current_row.segments.append(seg)
                     current_width += seg.width
@@ -349,7 +403,7 @@ class DanmakuLayoutBuilder:
                     settle_row()
                 continue
 
-            if seg.type in ('emoji', 'gift_image'):
+            if seg.type in ("emoji", "gift_image"):
                 if current_width + seg.width <= self.max_content_width:
                     current_row.segments.append(seg)
                     current_width += seg.width
@@ -361,7 +415,7 @@ class DanmakuLayoutBuilder:
                     current_width = seg.width
                 continue
 
-            if seg.type == 'text':
+            if seg.type == "text":
                 text_content = seg.content
                 text_color = seg.color
                 while text_content:
@@ -370,7 +424,9 @@ class DanmakuLayoutBuilder:
                         settle_row()
                         continue
 
-                    sub_len, best_w = _find_fit_len(self.fm, text_content, remaining_space)
+                    sub_len, best_w = _find_fit_len(
+                        self.fm, text_content, remaining_space
+                    )
                     if sub_len == 0:
                         if current_width == 0:
                             sub_len = 1
@@ -379,9 +435,11 @@ class DanmakuLayoutBuilder:
                             settle_row()
                             continue
 
-                    current_row.segments.append(RenderSegment(
-                        'text', text_content[:sub_len], best_w, text_color
-                    ))
+                    current_row.segments.append(
+                        RenderSegment(
+                            "text", text_content[:sub_len], best_w, text_color
+                        )
+                    )
                     current_row.width += best_w
                     current_width += best_w
                     text_content = text_content[sub_len:]

@@ -20,14 +20,16 @@ from ..layout.engine import LayoutEngine
 from ..render.assets import AssetLoader
 from ..render.layout_builder import DanmakuLayoutBuilder
 from ..encode.ffmpeg import FFmpegManager
-from ..utils.validation import validate_video_input, validate_xml_input, validate_output_path
+from ..utils.validation import (
+    validate_video_input,
+    validate_xml_input,
+    validate_output_path,
+)
 from .pipeline import RenderPipeline
 
 if TYPE_CHECKING:
     from ..input.event import DanmakuEvent
     from ..layout.engine import LayoutContext
-
-
 
 
 class DanmakuBurner:
@@ -79,8 +81,11 @@ class DanmakuBurner:
             assets_dir=self._config.system.assets_dir,
         )
         self._frame_encoder = FFmpegManager(
-            video_in, self.video_out, encode_mode,
-            self._config.encode, self._config.system,
+            video_in,
+            self.video_out,
+            encode_mode,
+            self._config.encode,
+            self._config.system,
         )
 
     def _prepare_events_and_video_info(
@@ -103,7 +108,8 @@ class DanmakuBurner:
         """
         cfg = self._config
         with ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="prepare",
+            max_workers=1,
+            thread_name_prefix="prepare",
         ) as pool:
             video_info_future = pool.submit(self._frame_encoder.get_video_info)
 
@@ -118,10 +124,10 @@ class DanmakuBurner:
             )
 
             resource = self._asset_provider.load_assets(events)
-            emoji_used = len(resource['used_emoji'])
-            emoji_missing = len(resource['missing_emoji'])
-            gift_used = len(resource['used_gift'])
-            gift_missing = len(resource['missing_gift'])
+            emoji_used = len(resource["used_emoji"])
+            emoji_missing = len(resource["missing_emoji"])
+            gift_used = len(resource["used_gift"])
+            gift_missing = len(resource["missing_gift"])
             logger.info(
                 f"[2] 加载资源 → "
                 f"Emoji {emoji_used - emoji_missing}/{emoji_used}, "
@@ -130,8 +136,8 @@ class DanmakuBurner:
 
             v_info = video_info_future.result()
 
-        fps: float = float(v_info['fps'])
-        total_frames: int = int(v_info['frames'])
+        fps: float = float(v_info["fps"])
+        total_frames: int = int(v_info["frames"])
         logger.info(
             f"[3] 视频信息 → {int(v_info['w'])}x{int(v_info['h'])}, {fps:.0f}fps, "
             f"{total_frames} 帧 ({total_frames / fps:.0f}s)"
@@ -139,7 +145,7 @@ class DanmakuBurner:
 
         # 用 .get 而非下标：vfr 是后加的字段，老调用方（含测试中的 mock）
         # 可能只给四个基本键，缺键时按「非 VFR」处理。
-        if v_info.get('vfr'):
+        if v_info.get("vfr"):
             # 帧率口径已按 frames/duration 修正（见 FFmpegManager
             # ._resolve_render_fps），时间轴不会漂移，这里只提示观感影响。
             logger.warning(
@@ -168,10 +174,10 @@ class DanmakuBurner:
         t_min = events[0].time if events else 0.0
         t_max = events[-1].time if events else 0.0
 
-        raw_w: int = int(v_info['w'])
-        raw_h: int = int(v_info['h'])
-        fps: float = float(v_info['fps'])
-        total_frames: int = int(v_info['frames'])
+        raw_w: int = int(v_info["w"])
+        raw_h: int = int(v_info["h"])
+        fps: float = float(v_info["fps"])
+        total_frames: int = int(v_info["frames"])
         duration = total_frames / fps
 
         # 编码器可用性（已在 __init__ 中探测）
@@ -189,8 +195,8 @@ class DanmakuBurner:
         gift_rate = gift_count / duration if duration > 0 else 0
         text_cap = anim.text_spawn_batch_size / anim.text_spawn_interval
         gift_cap = anim.gift_spawn_batch_size / anim.gift_spawn_interval
-        text_headroom = text_cap / text_rate if text_rate > 0 else float('inf')
-        gift_headroom = gift_cap / gift_rate if gift_rate > 0 else float('inf')
+        text_headroom = text_cap / text_rate if text_rate > 0 else float("inf")
+        gift_headroom = gift_cap / gift_rate if gift_rate > 0 else float("inf")
 
         def _headroom_verdict(headroom: float, lat: float | None) -> str:
             if headroom >= 2:
@@ -201,7 +207,7 @@ class DanmakuBurner:
                 return f"     ⚠️  超出基础能力，依赖自适应加速 (max_latency={lat}s)"
             return "     ❌ 超出基础能力且自适应已禁用，将丢弃弹幕"
 
-        missing_chars: set[str] = resource['missing_chars']
+        missing_chars: set[str] = resource["missing_chars"]
 
         def _asset_lines(label: str, used: set, missing: set) -> list[str]:
             ok = len(used) - len(missing)
@@ -215,11 +221,13 @@ class DanmakuBurner:
                 lines.append("     ℹ️  未使用")
             return lines
 
-        ok_count = sum([
-            len(missing_chars) == 0,
-            len(resource['missing_emoji']) == 0,
-            len(resource['missing_gift']) == 0,
-        ])
+        ok_count = sum(
+            [
+                len(missing_chars) == 0,
+                len(resource["missing_emoji"]) == 0,
+                len(resource["missing_gift"]) == 0,
+            ]
+        )
 
         # ── 构建报告（拼为单条消息，避免 print/log 交叉错位） ──
         lines: list[str] = []
@@ -228,15 +236,22 @@ class DanmakuBurner:
         lines.append(sep)
         lines.append("  资源完整性检查报告")
         lines.append(sep)
-        lines.append(f"\n  📹 视频: {raw_w}x{raw_h} @ {fps:.0f}fps, "
-                     f"{duration:.0f}s ({total_frames} 帧)")
-        lines.append(f"\n  💬 弹幕: {len(events)} 条"
-                     f" (文本 {text_count}, 礼物 {gift_count})")
+        lines.append(
+            f"\n  📹 视频: {raw_w}x{raw_h} @ {fps:.0f}fps, "
+            f"{duration:.0f}s ({total_frames} 帧)"
+        )
+        lines.append(
+            f"\n  💬 弹幕: {len(events)} 条 (文本 {text_count}, 礼物 {gift_count})"
+        )
         lines.append(f"     时间范围: {t_min:.1f}s ~ {t_max:.1f}s")
         lines.append("\n  🚀 发射能力评估:")
-        lines.append(f"     文本: {text_rate:.1f} 条/秒 (需求) vs {text_cap:.0f} 条/秒 (基础能力)")
+        lines.append(
+            f"     文本: {text_rate:.1f} 条/秒 (需求) vs {text_cap:.0f} 条/秒 (基础能力)"
+        )
         lines.append(_headroom_verdict(text_headroom, anim.max_spawn_latency))
-        lines.append(f"     礼物: {gift_rate:.1f} 条/秒 (需求) vs {gift_cap:.0f} 条/秒 (基础能力)")
+        lines.append(
+            f"     礼物: {gift_rate:.1f} 条/秒 (需求) vs {gift_cap:.0f} 条/秒 (基础能力)"
+        )
         lines.append(_headroom_verdict(gift_headroom, anim.max_spawn_latency))
         lines.append(f"\n  🔤 字体覆盖: {resource['total_chars']} 个不同字符")
         if missing_chars:
@@ -245,8 +260,14 @@ class DanmakuBurner:
                 lines.append(f"        {c!r}  (U+{ord(c):04X})")
         else:
             lines.append("     ✅ 全部字符已覆盖")
-        lines.extend(_asset_lines("Emoji 图片", resource['used_emoji'], resource['missing_emoji']))
-        lines.extend(_asset_lines("礼物图片", resource['used_gift'], resource['missing_gift']))
+        lines.extend(
+            _asset_lines(
+                "Emoji 图片", resource["used_emoji"], resource["missing_emoji"]
+            )
+        )
+        lines.extend(
+            _asset_lines("礼物图片", resource["used_gift"], resource["missing_gift"])
+        )
         lines.append(f"\n  ⚙️  编码器: {pipeline_label}")
         issues = 3 - ok_count
         if issues == 0:
@@ -282,10 +303,10 @@ class DanmakuBurner:
 
         events, _resource, v_info = self._prepare_events_and_video_info()
 
-        raw_w: int = int(v_info['w'])
-        raw_h: int = int(v_info['h'])
-        fps: float = float(v_info['fps'])
-        total_frames: int = int(v_info['frames'])
+        raw_w: int = int(v_info["w"])
+        raw_h: int = int(v_info["h"])
+        fps: float = float(v_info["fps"])
+        total_frames: int = int(v_info["frames"])
 
         align = syscfg.video_alignment
         w = int(((raw_w + align - 1) // align) * align)
@@ -293,7 +314,11 @@ class DanmakuBurner:
 
         # Step 4-6: 布局计算、构建器初始化、编码命令（均为瞬时操作）
         layout_params, layer_params = LayoutEngine.calculate_params(
-            w, h, style, cfg.ratio, self._asset_provider.line_height,
+            w,
+            h,
+            style,
+            cfg.ratio,
+            self._asset_provider.line_height,
         )
 
         layout_builder = DanmakuLayoutBuilder(
@@ -309,7 +334,9 @@ class DanmakuBurner:
 
         # Step 4
         pipeline = RenderPipeline(
-            self._frame_encoder, self._config, self._asset_provider,
+            self._frame_encoder,
+            self._config,
+            self._asset_provider,
         )
 
         failed = False
@@ -318,14 +345,23 @@ class DanmakuBurner:
             logger.info("[4] 准备就绪 → 启动 FFmpeg")
 
             result = pipeline.run(
-                fps, total_frames, events, layout_builder,
-                layout_params, layer_params,
+                fps,
+                total_frames,
+                events,
+                layout_builder,
+                layout_params,
+                layer_params,
             )
 
             DanmakuBurner._report_completion_stats(
-                events, result.layout_ctx, fps, total_frames,
-                result.total_text_danmaku, result.total_gift_danmaku,
-                result.text_spawned, result.gift_spawned,
+                events,
+                result.layout_ctx,
+                fps,
+                total_frames,
+                result.total_text_danmaku,
+                result.total_gift_danmaku,
+                result.text_spawned,
+                result.gift_spawned,
                 result.t_start,
             )
         except KeyboardInterrupt:
@@ -440,11 +476,19 @@ class DanmakuBurner:
         )
         if total_text_spawned < total_text_danmaku:
             DanmakuBurner._warn_unspawned(
-                events, layout_ctx.text_event_idx, video_duration,
-                "文本弹幕", total_text_spawned, total_text_danmaku,
+                events,
+                layout_ctx.text_event_idx,
+                video_duration,
+                "文本弹幕",
+                total_text_spawned,
+                total_text_danmaku,
             )
         if total_gift_spawned < total_gift_danmaku:
             DanmakuBurner._warn_unspawned(
-                events, layout_ctx.gift_event_idx, video_duration,
-                "礼物弹幕", total_gift_spawned, total_gift_danmaku,
+                events,
+                layout_ctx.gift_event_idx,
+                video_duration,
+                "礼物弹幕",
+                total_gift_spawned,
+                total_gift_danmaku,
             )

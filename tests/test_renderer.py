@@ -18,25 +18,38 @@ from danmakupro.layout.params import LayoutParams, LayerParams
 # 测试辅助
 # =============================================================================
 
+
 def _layer_params(
-    layer_w: int = 800, layer_h: int = 600,
-    layer_x: int = 20, layer_y: int = 0,
+    layer_w: int = 800,
+    layer_h: int = 600,
+    layer_x: int = 20,
+    layer_y: int = 0,
 ) -> LayerParams:
     return LayerParams(
-        layer_x=layer_x, layer_y=layer_y,
-        layer_w=layer_w, layer_h=layer_h,
+        layer_x=layer_x,
+        layer_y=layer_y,
+        layer_w=layer_w,
+        layer_h=layer_h,
     )
 
 
 def _layout_params(
-    bottom: int = 1000, text_h: int = 400, text_top: int = 600,
-    text_w: int = 800, gap: int = 4,
-    gift_top: int = 400, gift_h: int = 200,
+    bottom: int = 1000,
+    text_h: int = 400,
+    text_top: int = 600,
+    text_w: int = 800,
+    gap: int = 4,
+    gift_top: int = 400,
+    gift_h: int = 200,
 ) -> LayoutParams:
     return LayoutParams(
-        bottom=bottom, text_h=text_h, text_top=text_top,
-        text_w=text_w, gap=gap,
-        gift_top=gift_top, gift_h=gift_h,
+        bottom=bottom,
+        text_h=text_h,
+        text_top=text_top,
+        text_w=text_w,
+        gap=gap,
+        gift_top=gift_top,
+        gift_h=gift_h,
     )
 
 
@@ -117,7 +130,9 @@ class TestRenderFrame:
         text_dm = _make_stub_dm(current_y=800.0, height=50, x=20)
         gift_dm = _make_stub_dm(current_y=700.0, height=50, x=20)
 
-        renderer.render_frame([text_dm], [gift_dm], _layout_params(), fade_out_zone=50.0)
+        renderer.render_frame(
+            [text_dm], [gift_dm], _layout_params(), fade_out_zone=50.0
+        )
 
         text_dm.render.assert_called_once()
         gift_dm.render.assert_called_once()
@@ -202,7 +217,9 @@ class TestRenderFrame:
         """多个文本弹幕应全部渲染。"""
         lp = _layer_params(800, 600)
         renderer = DanmakuRenderer(lp)
-        dm_list = [_make_stub_dm(current_y=800.0 - i * 60, height=50, x=20) for i in range(3)]
+        dm_list = [
+            _make_stub_dm(current_y=800.0 - i * 60, height=50, x=20) for i in range(3)
+        ]
 
         renderer.render_frame(dm_list, [], _layout_params(), fade_out_zone=50.0)
 

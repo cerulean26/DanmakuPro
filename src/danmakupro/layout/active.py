@@ -31,8 +31,14 @@ class ActiveDanmaku:
     """
 
     __slots__ = [
-        'event', 'current_y', 'target_y', 'x',
-        'layout', 'is_locked_to_next', 'is_first_activation', 'spawn_time',
+        "event",
+        "current_y",
+        "target_y",
+        "x",
+        "layout",
+        "is_locked_to_next",
+        "is_first_activation",
+        "spawn_time",
     ]
 
     def __init__(

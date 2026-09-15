@@ -6,6 +6,7 @@
 
 本模块是这条约束的唯一守卫，改动任一侧都会立刻变红。
 """
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -74,7 +75,9 @@ def log_messages():
     from loguru import logger
 
     messages: list[str] = []
-    sink_id = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    sink_id = logger.add(
+        lambda m: messages.append(m.record["message"]), level="WARNING"
+    )
     try:
         yield messages
     finally:

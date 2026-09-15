@@ -8,7 +8,12 @@ from pathlib import Path
 from loguru import logger
 from PySide6.QtCore import Qt
 from PySide6.QtGui import (
-    QGuiApplication, QImage, QFont, QFontMetrics, QFontDatabase, QRawFont,
+    QGuiApplication,
+    QImage,
+    QFont,
+    QFontMetrics,
+    QFontDatabase,
+    QRawFont,
 )
 from ..config.models import DEFAULT_CONFIG
 from ..input.event import DanmakuEvent
@@ -52,7 +57,8 @@ def load_image_assets(
         img = QImage(str(file_path))
         if not img.isNull():
             cache[name] = img.scaled(
-                line_height, line_height,
+                line_height,
+                line_height,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -115,20 +121,24 @@ class AssetLoader:
             all_chars.update(ev.text)
             if ev.is_gift:
                 used_gift.add(ev.gift_name)
-            elif '[' in ev.text and ']' in ev.text:
+            elif "[" in ev.text and "]" in ev.text:
                 for name in extract_emoji_names(ev.text):
                     used_emoji.add(name)
 
         missing_chars = self._load_fonts_for_chars(all_chars)
-        missing_emoji = self._load_image_assets(self.emoji_dir, used_emoji, self.emoji_cache, "Emoji")
-        missing_gift = self._load_image_assets(self.gift_dir, used_gift, self.gift_cache, "礼物")
+        missing_emoji = self._load_image_assets(
+            self.emoji_dir, used_emoji, self.emoji_cache, "Emoji"
+        )
+        missing_gift = self._load_image_assets(
+            self.gift_dir, used_gift, self.gift_cache, "礼物"
+        )
         return {
-            'missing_chars': missing_chars,
-            'missing_emoji': missing_emoji,
-            'missing_gift': missing_gift,
-            'total_chars': len(all_chars),
-            'used_emoji': used_emoji,
-            'used_gift': used_gift,
+            "missing_chars": missing_chars,
+            "missing_emoji": missing_emoji,
+            "missing_gift": missing_gift,
+            "total_chars": len(all_chars),
+            "used_emoji": used_emoji,
+            "used_gift": used_gift,
         }
 
     def _load_image_assets(
@@ -139,7 +149,9 @@ class AssetLoader:
         asset_type: str,
     ) -> set[str]:
         """加载图片资源，委托给模块级函数。"""
-        return load_image_assets(asset_dir, asset_names, self.line_height, cache, asset_type)
+        return load_image_assets(
+            asset_dir, asset_names, self.line_height, cache, asset_type
+        )
 
     def _load_fonts_for_chars(self, chars: set[str]) -> set[str]:
         """按需从系统字体库加载覆盖缺失字符的字体
@@ -169,9 +181,7 @@ class AssetLoader:
             self._rebuild_font()
 
         if missing:
-            detail = ', '.join(
-                f"{c!r} (U+{ord(c):04X})" for c in sorted(missing)
-            )
+            detail = ", ".join(f"{c!r} (U+{ord(c):04X})" for c in sorted(missing))
             logger.warning(
                 f"以下 {len(missing)} 个字符无字体覆盖，将显示为占位符: {detail}"
             )
@@ -192,11 +202,13 @@ class AssetLoader:
     # Unicode Tags 区块 (U+E0000–U+E007F)：协议隐形标记，设计上永不可见
     _TAGS_BLOCK = range(0xE0000, 0xE0080)
 
-    def _find_missing_chars(self, chars: set[str], raw_fonts: list[QRawFont]) -> set[str]:
+    def _find_missing_chars(
+        self, chars: set[str], raw_fonts: list[QRawFont]
+    ) -> set[str]:
         """查找缺失字符"""
         missing: set[str] = set()
         for c in chars:
-            if c == ' ':
+            if c == " ":
                 continue
             if ord(c) in self._TAGS_BLOCK:
                 continue

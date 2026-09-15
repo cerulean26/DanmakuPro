@@ -36,7 +36,9 @@ class TestParseDanmaku:
 
     def test_single_danmaku(self, tmp_path):
         """单条弹幕应正确解析时间、用户和文本。"""
-        xml = '<i><d p="1.5,1,25,16777215,1234567890,0,user1,0" user="user1">你好</d></i>'
+        xml = (
+            '<i><d p="1.5,1,25,16777215,1234567890,0,user1,0" user="user1">你好</d></i>'
+        )
         path = _write_xml(tmp_path, xml)
         events = parse_xml(path)
         assert len(events) == 1
@@ -149,17 +151,23 @@ class TestParseGift:
         default = DEFAULT_CONFIG.animation.min_gift_price
 
         # 恰好等于阈值：必须保留（过滤是「不低于」，含边界）
-        at_threshold = _write_xml(tmp_path, (
-            f'<i><gift ts="1.0" user="u" giftname="火箭" giftcount="1" '
-            f'price="{int(default * 1000)}"/></i>'
-        ))
+        at_threshold = _write_xml(
+            tmp_path,
+            (
+                f'<i><gift ts="1.0" user="u" giftname="火箭" giftcount="1" '
+                f'price="{int(default * 1000)}"/></i>'
+            ),
+        )
         assert len(parse_xml(at_threshold)) == 1
 
         # 低于阈值一分钱：必须过滤
-        below = _write_xml(tmp_path, (
-            f'<i><gift ts="1.0" user="u" giftname="小花" giftcount="1" '
-            f'price="{int(round((default - 0.001) * 1000))}"/></i>'
-        ))
+        below = _write_xml(
+            tmp_path,
+            (
+                f'<i><gift ts="1.0" user="u" giftname="小花" giftcount="1" '
+                f'price="{int(round((default - 0.001) * 1000))}"/></i>'
+            ),
+        )
         assert len(parse_xml(below)) == 0
 
 
@@ -173,7 +181,7 @@ class TestParseMalformed:
 
     def test_danmaku_missing_p_attr(self, tmp_path):
         """缺少 p 属性的 <d> 标签应被跳过。"""
-        xml = '<i><d>没有 p 属性</d></i>'
+        xml = "<i><d>没有 p 属性</d></i>"
         path = _write_xml(tmp_path, xml)
         events = parse_xml(path)
         assert len(events) == 0
@@ -187,7 +195,9 @@ class TestParseMalformed:
 
     def test_gift_invalid_ts(self, tmp_path):
         """ts 属性非数字的 <gift> 标签应被跳过。"""
-        xml = '<i><gift ts="abc" user="u" giftname="g" giftcount="1" price="10000"/></i>'
+        xml = (
+            '<i><gift ts="abc" user="u" giftname="g" giftcount="1" price="10000"/></i>'
+        )
         path = _write_xml(tmp_path, xml)
         events = parse_xml(path)
         assert len(events) == 0

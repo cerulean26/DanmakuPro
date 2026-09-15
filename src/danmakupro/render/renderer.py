@@ -30,7 +30,8 @@ class DanmakuRenderer:
         """
         self._layer_params = layer_params
         self.canvas = QImage(
-            layer_params.layer_w, layer_params.layer_h,
+            layer_params.layer_w,
+            layer_params.layer_h,
             QImage.Format.Format_ARGB32,
         )
         self.painter = QPainter()

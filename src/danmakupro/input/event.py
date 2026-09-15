@@ -11,6 +11,7 @@ from dataclasses import dataclass
 @dataclass(slots=True)
 class DanmakuEvent:
     """弹幕事件"""
+
     time: float
     user: str
     text: str

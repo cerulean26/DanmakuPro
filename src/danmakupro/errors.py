@@ -19,8 +19,10 @@ from loguru import logger
 # 错误分类
 # =============================================================================
 
+
 class ErrorCategory(enum.Enum):
     """错误分类"""
+
     INPUT = "input"
     CONFIG = "config"
     RENDER = "render"
@@ -34,9 +36,11 @@ class ErrorCategory(enum.Enum):
 # 错误上下文
 # =============================================================================
 
+
 @dataclass
 class ErrorContext:
     """错误上下文信息"""
+
     frame_idx: int | None = None
     task_id: str | None = None
     component: str | None = None
@@ -47,6 +51,7 @@ class ErrorContext:
 # =============================================================================
 # 自定义异常
 # =============================================================================
+
 
 class DanmakuProError(Exception):
     """项目基础异常"""
@@ -64,30 +69,35 @@ class DanmakuProError(Exception):
 
 class InputError(DanmakuProError):
     """输入错误"""
+
     def __init__(self, message: str, context: ErrorContext | None = None):
         super().__init__(message, category=ErrorCategory.INPUT, context=context)
 
 
 class ConfigError(DanmakuProError):
     """配置错误"""
+
     def __init__(self, message: str, context: ErrorContext | None = None):
         super().__init__(message, category=ErrorCategory.CONFIG, context=context)
 
 
 class RenderError(DanmakuProError):
     """渲染错误"""
+
     def __init__(self, message: str, context: ErrorContext | None = None):
         super().__init__(message, category=ErrorCategory.RENDER, context=context)
 
 
 class EncodeError(DanmakuProError):
     """编码错误"""
+
     def __init__(self, message: str, context: ErrorContext | None = None):
         super().__init__(message, category=ErrorCategory.ENCODE, context=context)
 
 
 class ResourceError(DanmakuProError):
     """资源错误"""
+
     def __init__(self, message: str, context: ErrorContext | None = None):
         super().__init__(message, category=ErrorCategory.RESOURCE, context=context)
 
@@ -95,6 +105,7 @@ class ResourceError(DanmakuProError):
 # =============================================================================
 # 错误处理器
 # =============================================================================
+
 
 class ErrorHandler:
     """统一错误处理器"""
@@ -155,6 +166,7 @@ class ErrorHandler:
 # =============================================================================
 # 便捷函数
 # =============================================================================
+
 
 def handle_error(
     error: Exception,

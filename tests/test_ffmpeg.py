@@ -9,7 +9,9 @@ import pytest
 
 from danmakupro.encode.ffmpeg import FFmpegManager, _probe_encode_pipeline
 from danmakupro.config.models import (
-    EncodeMode, SystemParams, DEFAULT_CONFIG,
+    EncodeMode,
+    SystemParams,
+    DEFAULT_CONFIG,
 )
 from danmakupro.layout.params import LayerParams
 
@@ -52,6 +54,7 @@ def ffmpeg_mgr():
 # _resolve_encode_mode
 # =============================================================================
 
+
 def _bare_mgr(mode):
     """构造一个绕过 __init__ 的管理器，只填 _resolve_encode_mode 需要的属性。"""
     mgr = FFmpegManager.__new__(FFmpegManager)
@@ -63,7 +66,6 @@ def _bare_mgr(mode):
 
 
 class TestResolveEncodeMode:
-
     def test_ffmpeg_not_found_raises(self):
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
@@ -77,36 +79,50 @@ class TestResolveEncodeMode:
 
     def test_gpu_mode_nvenc_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_nvenc_available", return_value=True):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True
+            ):
                 mgr = _bare_mgr(EncodeMode.GPU)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.GPU
 
     def test_gpu_mode_nvenc_unavailable_raises(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=False
+            ):
                 with pytest.raises(RuntimeError, match="未检测到 NVENC"):
                     _bare_mgr(EncodeMode.GPU)._resolve_encode_mode()
 
     def test_auto_mode_prefers_nvenc(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_nvenc_available", return_value=True):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True
+            ):
                 mgr = _bare_mgr(EncodeMode.AUTO)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.GPU
 
     def test_auto_mode_falls_back_to_qsv(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
-                with patch.object(FFmpegManager, "_check_qsv_available", return_value=True):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=False
+            ):
+                with patch.object(
+                    FFmpegManager, "_check_qsv_available", return_value=True
+                ):
                     mgr = _bare_mgr(EncodeMode.AUTO)
                     mgr._resolve_encode_mode()
                     assert mgr.active_pipeline == EncodeMode.QSV
 
     def test_auto_mode_falls_back_to_cpu(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
-                with patch.object(FFmpegManager, "_check_qsv_available", return_value=False):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=False
+            ):
+                with patch.object(
+                    FFmpegManager, "_check_qsv_available", return_value=False
+                ):
                     mgr = _bare_mgr(EncodeMode.AUTO)
                     mgr._resolve_encode_mode()
                     assert mgr.active_pipeline == EncodeMode.CPU
@@ -122,6 +138,7 @@ class TestResolveEncodeMode:
 # =============================================================================
 # 惰性探测
 # =============================================================================
+
 
 class TestLazyProbe:
     """构造 FFmpegManager 不应付探测代价，首次读取 active_pipeline 才探测。
@@ -185,13 +202,16 @@ class TestLazyProbe:
 # 探测结果缓存
 # =============================================================================
 
+
 class TestProbeCache:
     """探测结果必须缓存：重复构造不应重跑 ffmpeg 子进程。"""
 
     def test_probe_runs_once_for_repeated_construction(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True,
+                FFmpegManager,
+                "_check_nvenc_available",
+                return_value=True,
             ) as mock_nvenc:
                 for _ in range(3):
                     _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
@@ -200,7 +220,9 @@ class TestProbeCache:
     def test_probe_reruns_after_cache_clear(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True,
+                FFmpegManager,
+                "_check_nvenc_available",
+                return_value=True,
             ) as mock_nvenc:
                 _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
                 FFmpegManager.clear_probe_cache()
@@ -209,7 +231,9 @@ class TestProbeCache:
 
     def test_probe_reruns_when_ffmpeg_path_differs(self):
         with patch.object(
-            FFmpegManager, "_check_nvenc_available", return_value=True,
+            FFmpegManager,
+            "_check_nvenc_available",
+            return_value=True,
         ) as mock_nvenc:
             with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
                 _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
@@ -220,7 +244,9 @@ class TestProbeCache:
     def test_probe_reruns_when_timeout_differs(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True,
+                FFmpegManager,
+                "_check_nvenc_available",
+                return_value=True,
             ) as mock_nvenc:
                 _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
                 fast = _bare_mgr(EncodeMode.AUTO)
@@ -231,7 +257,9 @@ class TestProbeCache:
     def test_cpu_mode_never_probes(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True,
+                FFmpegManager,
+                "_check_nvenc_available",
+                return_value=True,
             ) as mock_nvenc:
                 _bare_mgr(EncodeMode.CPU)._resolve_encode_mode()
                 assert mock_nvenc.call_count == 0
@@ -240,6 +268,7 @@ class TestProbeCache:
 # =============================================================================
 # ffmpeg_timeout 接线
 # =============================================================================
+
 
 class TestTimeoutPlumbing:
     """ffmpeg_timeout 必须真正驱动子进程超时。"""
@@ -272,8 +301,8 @@ class TestTimeoutPlumbing:
 # _check_nvenc_available / _check_qsv_available
 # =============================================================================
 
-class TestCheckEncoders:
 
+class TestCheckEncoders:
     def test_nvenc_not_in_encoders(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout="h264_amf", returncode=0)
@@ -339,7 +368,9 @@ class TestCheckEncoders:
 
     def test_qsv_probe_timeout(self):
         """列编码器这一步超时（机器卡顿）：同样判不可用而非抛出。"""
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 5)):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 5)
+        ):
             assert FFmpegManager._check_qsv_available() is False
 
     def test_qsv_test_encode_timeout(self):
@@ -354,6 +385,7 @@ class TestCheckEncoders:
 # =============================================================================
 # _probe_encode_pipeline
 # =============================================================================
+
 
 class TestProbeEncodePipeline:
     """显式指定硬件编码器但不可用时必须报错，不能静默退回 CPU。
@@ -376,7 +408,9 @@ class TestProbeEncodePipeline:
         with patch.object(FFmpegManager, "_check_nvenc_available") as mock_nvenc:
             with patch.object(FFmpegManager, "_check_qsv_available") as mock_qsv:
                 resolved = _probe_encode_pipeline(
-                    EncodeMode.CPU, "/usr/bin/ffmpeg", 5,
+                    EncodeMode.CPU,
+                    "/usr/bin/ffmpeg",
+                    5,
                 )
                 assert resolved == EncodeMode.CPU
                 mock_nvenc.assert_not_called()
@@ -386,6 +420,7 @@ class TestProbeEncodePipeline:
 # =============================================================================
 # _parse_frame_rate
 # =============================================================================
+
 
 class TestParseFrameRate:
     """r_frame_rate 是 "num/den" 字符串，任何畸形都要回落到 0.0。
@@ -399,12 +434,12 @@ class TestParseFrameRate:
         [
             ("30/1", 30.0),
             ("30000/1001", pytest.approx(29.97, rel=1e-4)),
-            ("25", 25.0),        # 无分母，按 /1 处理
-            (None, 0.0),         # 字段缺失
-            ("", 0.0),           # 空串
-            ("abc/1", 0.0),      # 分子非数字
-            ("30/abc", 0.0),     # 分母非数字
-            ("30/0", 0.0),       # 分母为 0
+            ("25", 25.0),  # 无分母，按 /1 处理
+            (None, 0.0),  # 字段缺失
+            ("", 0.0),  # 空串
+            ("abc/1", 0.0),  # 分子非数字
+            ("30/abc", 0.0),  # 分母非数字
+            ("30/0", 0.0),  # 分母为 0
         ],
     )
     def test_parse(self, raw, expected):
@@ -415,8 +450,8 @@ class TestParseFrameRate:
 # get_video_info
 # =============================================================================
 
-class TestGetVideoInfo:
 
+class TestGetVideoInfo:
     def test_ffprobe_not_found(self, ffmpeg_mgr):
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="未找到 ffprobe"):
@@ -463,7 +498,7 @@ class TestGetVideoInfo:
         with patch("shutil.which", return_value="/usr/bin/ffprobe"):
             with patch("subprocess.run", return_value=mock_result):
                 info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 100          # 4.0s × 25fps 估算
+        assert info["frames"] == 100  # 4.0s × 25fps 估算
         assert info["fps"] == 25.0
 
     def test_missing_nb_frames_falls_back_to_duration_estimate(self, ffmpeg_mgr):
@@ -492,12 +527,13 @@ class TestGetVideoInfo:
                 info = ffmpeg_mgr.get_video_info()
         assert info["frames"] == 100
         assert info["fps"] == 25.0
-        assert info["vfr"] is False           # duration 未知时不该报 VFR
+        assert info["vfr"] is False  # duration 未知时不该报 VFR
 
 
 # =============================================================================
 # 帧率口径与 VFR 判定
 # =============================================================================
+
 
 def _probe_json(rate: str, frames: int | None, duration: str) -> str:
     """构造 ffprobe 主探测的输出。"""
@@ -512,7 +548,7 @@ def _probe_json(rate: str, frames: int | None, duration: str) -> str:
 def _sample_json(count: int, interval: float) -> str:
     """构造一段采样的 pts_time 列表，count 帧、间隔 interval 秒。"""
     pts = ",".join(f'{{"pts_time":"{i * interval:.4f}"}}' for i in range(count))
-    return '{"frames":[' + pts + ']}'
+    return '{"frames":[' + pts + "]}"
 
 
 class TestResolveRenderFps:
@@ -558,7 +594,6 @@ class TestResolveRenderFps:
 
 
 class TestDetectVfr:
-
     def test_constant_rate_is_not_vfr(self):
         assert FFmpegManager._detect_vfr([20.0, 20.0, 20.0]) is False
 
@@ -574,7 +609,6 @@ class TestDetectVfr:
 
 
 class TestSampleLocalFrameRates:
-
     def test_samples_three_segments(self, ffmpeg_mgr):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout=_sample_json(100, 0.05))
@@ -610,11 +644,11 @@ class TestSampleLocalFrameRates:
         payload = (
             '{"frames":['
             '{"pts_time":"0.0000"},'
-            '{"no_pts":1},'          # KeyError
-            '{"pts_time":"abc"},'     # ValueError
-            '{"pts_time":null},'      # TypeError
+            '{"no_pts":1},'  # KeyError
+            '{"pts_time":"abc"},'  # ValueError
+            '{"pts_time":null},'  # TypeError
             '{"pts_time":"0.1000"}'
-            ']}'
+            "]}"
         )
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout=payload)
@@ -638,9 +672,9 @@ class TestGetVideoInfoFrameRate:
     def test_vfr_source_gets_real_average_fps(self, ffmpeg_mgr):
         side = [
             MagicMock(stdout=_probe_json("30/1", 2000, "100.0")),
-            MagicMock(stdout=_sample_json(100, 0.05)),   # 20fps
-            MagicMock(stdout=_sample_json(100, 0.04)),   # 25fps
-            MagicMock(stdout=_sample_json(100, 0.05)),   # 20fps
+            MagicMock(stdout=_sample_json(100, 0.05)),  # 20fps
+            MagicMock(stdout=_sample_json(100, 0.04)),  # 25fps
+            MagicMock(stdout=_sample_json(100, 0.05)),  # 20fps
         ]
         with patch("shutil.which", return_value="/usr/bin/ffprobe"):
             with patch("subprocess.run", side_effect=side):
@@ -668,8 +702,8 @@ class TestGetVideoInfoFrameRate:
 # build_command
 # =============================================================================
 
-class TestBuildCommand:
 
+class TestBuildCommand:
     def test_cpu_command(self, ffmpeg_mgr):
         lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
         cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
@@ -695,8 +729,8 @@ class TestBuildCommand:
 # start / submit_frame / cleanup
 # =============================================================================
 
-class TestProcessLifecycle:
 
+class TestProcessLifecycle:
     def test_start_creates_process(self, ffmpeg_mgr):
         mock_proc = MagicMock()
         mock_proc.stdin = MagicMock()
@@ -749,12 +783,14 @@ class TestProcessLifecycle:
     @pytest.mark.parametrize(
         "return_code",
         [
-            0,    # 只在 Python 侧中断，FFmpeg 按 stdin EOF 正常收尾
+            0,  # 只在 Python 侧中断，FFmpeg 按 stdin EOF 正常收尾
             255,  # 控制台 Ctrl+C 连带杀掉 FFmpeg（Windows 实测码）
         ],
     )
     def test_cleanup_interrupted_not_marked_success(
-        self, ffmpeg_mgr, return_code,
+        self,
+        ffmpeg_mgr,
+        return_code,
     ):
         """中断时无论 FFmpeg 怎么退出，都不能记成压制成功。
 
@@ -795,6 +831,7 @@ class TestProcessLifecycle:
 # =============================================================================
 # stderr 读取线程
 # =============================================================================
+
 
 class TestStderrReader:
     """stderr 逐行解析 —— 编码速度与故障日志都只在这条路径上产生。
@@ -860,14 +897,15 @@ class TestStderrReader:
 # 进程收尾的异常路径
 # =============================================================================
 
+
 class TestCleanupFailures:
     """收尾阶段任何一步出问题都不能让清理半途而废（残留产物、残留管道）。"""
 
     def test_submit_frame_process_alive_but_stdin_missing(self, ffmpeg_mgr):
         """进程活着但 stdin 已不可用（收尾竞态）：明确报「未启动」。"""
         mock_proc = MagicMock()
-        mock_proc.poll.return_value = None          # 健康检查通过
-        mock_proc.stdin = None                      # 但管道没了
+        mock_proc.poll.return_value = None  # 健康检查通过
+        mock_proc.stdin = None  # 但管道没了
         ffmpeg_mgr.process = mock_proc
         with pytest.raises(RuntimeError, match="FFmpeg 未启动"):
             ffmpeg_mgr.submit_frame(memoryview(b"data"))
@@ -896,7 +934,7 @@ class TestCleanupFailures:
         ffmpeg_mgr.process = mock_proc
         ffmpeg_mgr.stderr_thread = None
         ffmpeg_mgr.cleanup()
-        mock_proc.wait.assert_called_once()          # 后续步骤照常执行
+        mock_proc.wait.assert_called_once()  # 后续步骤照常执行
 
     def test_cleanup_swallows_stderr_close_error(self, ffmpeg_mgr):
         mock_proc = MagicMock()
@@ -907,7 +945,7 @@ class TestCleanupFailures:
         ffmpeg_mgr.process = mock_proc
         ffmpeg_mgr.stderr_thread = None
         ffmpeg_mgr.cleanup()
-        assert ffmpeg_mgr.process is None            # 结尾的置空仍发生
+        assert ffmpeg_mgr.process is None  # 结尾的置空仍发生
 
     def test_failed_encode_is_logged_as_error(self, ffmpeg_mgr):
         """非中断且非 0 退出 = 真失败：记 error，且不能置 encode_succeeded。"""
@@ -936,6 +974,6 @@ class TestCleanupFailures:
         with patch("danmakupro.encode.ffmpeg.logger") as mock_logger:
             ffmpeg_mgr.cleanup()
         mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2        # 第一次超时，第二次回收
+        assert mock_proc.wait.call_count == 2  # 第一次超时，第二次回收
         assert mock_logger.warning.call_count == 1
         assert ffmpeg_mgr.process is None

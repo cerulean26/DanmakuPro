@@ -41,8 +41,8 @@ def sample_xml(tmp_path: Path) -> Path:
 # 测试：XML 解析
 # =============================================================================
 
-class TestGiftParsing:
 
+class TestGiftParsing:
     def test_parse_gift_events(self, sample_xml: Path):
         events = parse_xml(str(sample_xml), min_gift_price=0.0)
         assert len(events) == 5
@@ -75,12 +75,16 @@ class TestGiftParsing:
 # 测试：弹幕对象构建与预渲染
 # =============================================================================
 
-class TestActiveDanmaku:
 
+class TestActiveDanmaku:
     def test_gift_segment_building(self, qapp, asset_loader):
         event = DanmakuEvent(
-            time=0, user="测试用户", text="小心心x10",
-            is_gift=True, gift_name="小心心", gift_count=10
+            time=0,
+            user="测试用户",
+            text="小心心x10",
+            is_gift=True,
+            gift_name="小心心",
+            gift_count=10,
         )
         asset_loader.load_assets([event])
 
@@ -102,15 +106,19 @@ class TestActiveDanmaku:
         for row in dm.rows:
             all_segments.extend(row.segments)
         segment_types = [seg.type for seg in all_segments]
-        assert 'text' in segment_types
+        assert "text" in segment_types
 
         if event.gift_name in asset_loader.gift_cache:
-            assert 'gift_image' in segment_types or 'spacing' in segment_types
+            assert "gift_image" in segment_types or "spacing" in segment_types
 
     def test_gift_pre_render(self, qapp, asset_loader):
         event = DanmakuEvent(
-            time=0, user="用户", text="保时捷x1",
-            is_gift=True, gift_name="保时捷", gift_count=1
+            time=0,
+            user="用户",
+            text="保时捷x1",
+            is_gift=True,
+            gift_name="保时捷",
+            gift_count=1,
         )
         asset_loader.load_assets([event])
 
@@ -145,15 +153,19 @@ class TestActiveDanmaku:
 # 测试：端到端渲染验证
 # =============================================================================
 
-class TestGiftEndToEnd:
 
+class TestGiftEndToEnd:
     def test_gift_render_to_canvas(self, qapp, asset_loader):
         from danmakupro.render.renderer import DanmakuRenderer
         from danmakupro.layout.params import LayerParams
 
         event = DanmakuEvent(
-            time=0, user="测试用户", text="小心心x99",
-            is_gift=True, gift_name="小心心", gift_count=99
+            time=0,
+            user="测试用户",
+            text="小心心x99",
+            is_gift=True,
+            gift_name="小心心",
+            gift_count=99,
         )
         asset_loader.load_assets([event])
 

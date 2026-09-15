@@ -24,6 +24,7 @@ from .params import LayoutParams, LayerParams
 @dataclass
 class LayoutContext:
     """布局上下文"""
+
     animation: AnimationParams = field(default_factory=lambda: DEFAULT_CONFIG.animation)
     text_event_idx: int = 0
     gift_event_idx: int = 0
@@ -77,7 +78,8 @@ class LayoutEngine:
 
     @staticmethod
     def calculate_params(
-        w: int, h: int,
+        w: int,
+        h: int,
         style: LayoutStyle = DEFAULT_CONFIG.style,
         ratio: LayoutRatio = DEFAULT_CONFIG.ratio,
         line_height: int = 0,
@@ -121,8 +123,10 @@ class LayoutEngine:
             layer_w = max(0, w - layer_x)
 
         layer_params = LayerParams(
-            layer_x=layer_x, layer_y=layer_y,
-            layer_w=layer_w, layer_h=layer_h,
+            layer_x=layer_x,
+            layer_y=layer_y,
+            layer_w=layer_w,
+            layer_h=layer_h,
         )
 
         return layout_params, layer_params
@@ -131,11 +135,11 @@ class LayoutEngine:
     def spawn_new_danmakus(
         ctx: LayoutContext,
         current_time: float,
-        event_pool: list['DanmakuEvent'],
-        active_text: list['ActiveDanmakuView'],
-        active_gift: list['ActiveDanmakuView'],
-        layout_builder: 'DanmakuLayoutBuilder',
-        asset_provider: 'AssetLoader',
+        event_pool: list["DanmakuEvent"],
+        active_text: list["ActiveDanmakuView"],
+        active_gift: list["ActiveDanmakuView"],
+        layout_builder: "DanmakuLayoutBuilder",
+        asset_provider: "AssetLoader",
         style: LayoutStyle = DEFAULT_CONFIG.style,
     ) -> tuple[bool, bool, int, int]:
         """根据当前时间按需生成新弹幕（惰性创建模式）。
@@ -196,16 +200,16 @@ class LayoutEngine:
         *,
         ctx: LayoutContext,
         current_time: float,
-        pool: list['DanmakuEvent'],
+        pool: list["DanmakuEvent"],
         want_gift: bool,
-        active: list['ActiveDanmakuView'],
+        active: list["ActiveDanmakuView"],
         batch_size: int,
         spawn_interval: float,
         max_latency: float | None,
         idx_attr: str,
         last_spawn_attr: str,
-        layout_builder: 'DanmakuLayoutBuilder',
-        asset_provider: 'AssetLoader',
+        layout_builder: "DanmakuLayoutBuilder",
+        asset_provider: "AssetLoader",
         style: LayoutStyle,
     ) -> int:
         """发射单层弹幕（文本层与礼物层共用同一套节流逻辑）。
@@ -248,7 +252,10 @@ class LayoutEngine:
 
         last_spawn = getattr(ctx, last_spawn_attr)
         effective_interval = LayoutEngine.effective_spawn_interval(
-            pending, batch_size, spawn_interval, max_latency,
+            pending,
+            batch_size,
+            spawn_interval,
+            max_latency,
         )
         can_spawn = (
             pending <= batch_size
@@ -288,13 +295,13 @@ class LayoutEngine:
 
     @staticmethod
     def recycle_out_of_bounds(
-        active_danmakus: list['ActiveDanmakuView'],
+        active_danmakus: list["ActiveDanmakuView"],
         zone_top: int,
         current_time: float | None = None,
         dwell_time: float | None = None,
     ) -> None:
         """回收超出屏幕范围的弹幕，释放缓存图片以控制内存。"""
-        remaining: list['ActiveDanmakuView'] = []
+        remaining: list["ActiveDanmakuView"] = []
         for dm in active_danmakus:
             out = dm.is_out_of_bounds(zone_top)
             expired = (
@@ -310,7 +317,7 @@ class LayoutEngine:
 
     @staticmethod
     def update_danmaku_layer(
-        active_danmakus: list['ActiveDanmakuView'],
+        active_danmakus: list["ActiveDanmakuView"],
         has_new: bool,
         zone_bottom: int,
         zone_top: int,
@@ -339,16 +346,24 @@ class LayoutEngine:
             all_stable = False
 
         LayoutEngine._update_and_collide(
-            active_danmakus, has_new, zone_bottom, zone_top, gap, damping,
+            active_danmakus,
+            has_new,
+            zone_bottom,
+            zone_top,
+            gap,
+            damping,
             skip_collision=all_stable,
         )
         LayoutEngine.recycle_out_of_bounds(
-            active_danmakus, zone_top, current_time, dwell_time,
+            active_danmakus,
+            zone_top,
+            current_time,
+            dwell_time,
         )
 
     @staticmethod
     def _update_and_collide(
-        active_danmakus: Sequence['ActiveDanmaku | ActiveDanmakuView'],
+        active_danmakus: Sequence["ActiveDanmaku | ActiveDanmakuView"],
         has_new: bool,
         zone_bottom: int,
         zone_top: int,
@@ -402,7 +417,11 @@ class LayoutEngine:
 
         visible_start = 0
         while visible_start < n:
-            if active_danmakus[visible_start].current_y + active_danmakus[visible_start].height <= zone_top:
+            if (
+                active_danmakus[visible_start].current_y
+                + active_danmakus[visible_start].height
+                <= zone_top
+            ):
                 visible_start += 1
             else:
                 break
@@ -433,8 +452,9 @@ class LayoutEngine:
 # 模块级辅助函数
 # =============================================================================
 
+
 def _all_positions_stable(
-    active_danmakus: Sequence['ActiveDanmaku | ActiveDanmakuView'],
+    active_danmakus: Sequence["ActiveDanmaku | ActiveDanmakuView"],
     threshold: float = 0.5,
 ) -> bool:
     """检查所有弹幕位置是否已稳定（目标位置与当前位置差小于阈值）。"""

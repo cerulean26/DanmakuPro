@@ -9,8 +9,14 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 from .config.models import (
-    DanmakuConfig, DEFAULT_CONFIG, EncodeMode,
-    LayoutStyle, LayoutRatio, AnimationParams, EncodeParams, SystemParams,
+    DanmakuConfig,
+    DEFAULT_CONFIG,
+    EncodeMode,
+    LayoutStyle,
+    LayoutRatio,
+    AnimationParams,
+    EncodeParams,
+    SystemParams,
 )
 
 if TYPE_CHECKING:
@@ -20,8 +26,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     # 配置
-    "DanmakuConfig", "DEFAULT_CONFIG", "EncodeMode",
-    "LayoutStyle", "LayoutRatio", "AnimationParams", "EncodeParams", "SystemParams",
+    "DanmakuConfig",
+    "DEFAULT_CONFIG",
+    "EncodeMode",
+    "LayoutStyle",
+    "LayoutRatio",
+    "AnimationParams",
+    "EncodeParams",
+    "SystemParams",
     # 核心
     "DanmakuBurner",
     # 输入

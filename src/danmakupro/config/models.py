@@ -13,8 +13,10 @@ from enum import StrEnum
 # 编码模式
 # =============================================================================
 
+
 class EncodeMode(StrEnum):
     """编码模式常量"""
+
     AUTO = "auto"
     GPU = "gpu"
     QSV = "qsv"
@@ -24,6 +26,7 @@ class EncodeMode(StrEnum):
 # =============================================================================
 # 校验辅助函数
 # =============================================================================
+
 
 def _assert_non_negative(obj: object, *names: str) -> None:
     for name in names:
@@ -43,11 +46,13 @@ def _assert_positive(obj: object, *names: str) -> None:
 # 子配置
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class LayoutStyle:
     """布局样式配置"""
+
     danmaku_x: int = 35
-    layer_width_extra: int = 100 
+    layer_width_extra: int = 100
     bubble_padding_x: int = 14
     bubble_padding_y: int = 5
     bubble_row_gap: int = 5
@@ -63,10 +68,18 @@ class LayoutStyle:
     gift_color: tuple[int, int, int] = (255, 255, 150)
 
     def __post_init__(self):
-        _assert_non_negative(self, "bubble_padding_x", "bubble_padding_y",
-                             "bubble_row_gap", "bubble_vertical_gap",
-                             "gift_spacing", "emoji_spacing", "danmaku_x",
-                             "layer_width_extra", "fade_out_zone")
+        _assert_non_negative(
+            self,
+            "bubble_padding_x",
+            "bubble_padding_y",
+            "bubble_row_gap",
+            "bubble_vertical_gap",
+            "gift_spacing",
+            "emoji_spacing",
+            "danmaku_x",
+            "layer_width_extra",
+            "fade_out_zone",
+        )
         _assert_positive(self, "font_size")
         _assert_non_negative(self, "bubble_multiline_radius")
         for name in ("bubble_bg_color", "username_color", "text_color", "gift_color"):
@@ -84,6 +97,7 @@ class LayoutRatio:
 
     使用"弹幕行数"替代"高度比例"，用户无需计算像素。
     """
+
     max_text_rows: int = 8
     max_gift_rows: int = 2
     text_width_ratio: float = 0.825
@@ -92,12 +106,15 @@ class LayoutRatio:
     def __post_init__(self):
         _assert_non_negative(self, "max_text_rows", "max_gift_rows", "bottom_margin")
         if not (0 < self.text_width_ratio <= 1.0):
-            raise ValueError(f"text_width_ratio 必须在 (0, 1] 范围内，当前 {self.text_width_ratio}")
+            raise ValueError(
+                f"text_width_ratio 必须在 (0, 1] 范围内，当前 {self.text_width_ratio}"
+            )
 
 
 @dataclass(frozen=True)
 class AnimationParams:
     """动画参数配置"""
+
     text_damping_factor: float = 0.25
     gift_damping_factor: float = 0.25
     text_spawn_interval: float = 0.5
@@ -116,8 +133,9 @@ class AnimationParams:
             v = getattr(self, name)
             if not (0 < v <= 1.0):
                 raise ValueError(f"{name} 必须在 (0, 1] 范围内，当前 {v}")
-        _assert_non_negative(self, "text_spawn_interval", "gift_spawn_interval",
-                             "min_gift_price")
+        _assert_non_negative(
+            self, "text_spawn_interval", "gift_spawn_interval", "min_gift_price"
+        )
         _assert_positive(self, "text_spawn_batch_size", "gift_spawn_batch_size")
         if self.max_spawn_latency is not None and self.max_spawn_latency <= 0:
             raise ValueError(
@@ -130,6 +148,7 @@ class AnimationParams:
 @dataclass(frozen=True)
 class EncodeParams:
     """编码参数配置"""
+
     gpu_preset: str = "p4"
     gpu_cq: int = 23
     qsv_preset: str = "medium"
@@ -152,6 +171,7 @@ class EncodeParams:
 @dataclass(frozen=True)
 class SystemParams:
     """系统参数配置"""
+
     pipe_buffer_size: int = 10_000_000
     # 编码器探测与 ffprobe 的子进程超时（秒）
     ffmpeg_timeout: int = 10
@@ -160,9 +180,13 @@ class SystemParams:
     assets_dir: str = "assets"
 
     def __post_init__(self):
-        _assert_positive(self, "pipe_buffer_size",
-                         "ffmpeg_timeout", "stderr_thread_timeout")
-        if self.video_alignment <= 0 or (self.video_alignment & (self.video_alignment - 1)) != 0:
+        _assert_positive(
+            self, "pipe_buffer_size", "ffmpeg_timeout", "stderr_thread_timeout"
+        )
+        if (
+            self.video_alignment <= 0
+            or (self.video_alignment & (self.video_alignment - 1)) != 0
+        ):
             raise ValueError(
                 f"video_alignment 必须是 2 的幂，当前 {self.video_alignment}"
             )
@@ -172,9 +196,11 @@ class SystemParams:
 # 聚合配置
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class DanmakuConfig:
     """弹幕压制完整配置"""
+
     style: LayoutStyle = field(default_factory=LayoutStyle)
     ratio: LayoutRatio = field(default_factory=LayoutRatio)
     animation: AnimationParams = field(default_factory=AnimationParams)

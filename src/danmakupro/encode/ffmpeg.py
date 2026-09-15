@@ -36,7 +36,7 @@ _PIPELINE_LABELS: dict[str, str] = {
 class FFmpegManager:
     """FFmpeg 进程管理器"""
 
-    _SPEED_RE = re.compile(r'speed=\s*([\d.]+)x')
+    _SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
 
     #: VFR 采样判据：在视频前、中、后各取 _VFR_SAMPLE_SECONDS 秒，比较三段
     #: 局部帧率的相对极差，超过 _VFR_SAMPLE_TOLERANCE 即判为变帧率。
@@ -151,12 +151,16 @@ class FFmpegManager:
         _probe_encode_pipeline.cache_clear()
 
     @staticmethod
-    def _check_nvenc_available(timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout) -> bool:
+    def _check_nvenc_available(
+        timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout,
+    ) -> bool:
         """检查 NVENC 是否可用"""
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             if "h264_nvenc" not in result.stdout:
                 return False
@@ -166,23 +170,38 @@ class FFmpegManager:
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y", "-hide_banner",
-                    "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-                    "-c:v", "h264_nvenc", "-f", "null", "-",
+                    "ffmpeg",
+                    "-y",
+                    "-hide_banner",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "nullsrc=s=64x64:d=0.1",
+                    "-c:v",
+                    "h264_nvenc",
+                    "-f",
+                    "null",
+                    "-",
                 ],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
     @staticmethod
-    def _check_qsv_available(timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout) -> bool:
+    def _check_qsv_available(
+        timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout,
+    ) -> bool:
         """检查 QSV 是否可用"""
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             if "h264_qsv" not in result.stdout:
                 return False
@@ -192,11 +211,22 @@ class FFmpegManager:
         try:
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y", "-hide_banner",
-                    "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-                    "-c:v", "h264_qsv", "-f", "null", "-",
+                    "ffmpeg",
+                    "-y",
+                    "-hide_banner",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "nullsrc=s=64x64:d=0.1",
+                    "-c:v",
+                    "h264_qsv",
+                    "-f",
+                    "null",
+                    "-",
                 ],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -294,14 +324,25 @@ class FFmpegManager:
         for start in starts:
             spec = f"{start:.3f}%+" + f"{self._VFR_SAMPLE_SECONDS:.3f}"
             cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-read_intervals", spec,
-                "-show_entries", "frame=pts_time", "-of", "json",
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-read_intervals",
+                spec,
+                "-show_entries",
+                "frame=pts_time",
+                "-of",
+                "json",
                 self.video_in,
             ]
             try:
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, check=True,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
                     timeout=timeout,
                 )
                 raw = json.loads(result.stdout).get("frames", [])
@@ -341,13 +382,22 @@ class FFmpegManager:
                 "  其他系统: https://ffmpeg.org/download.html"
             )
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
             "-show_entries",
             "stream=width,height,r_frame_rate,nb_frames:format=duration",
-            "-of", "json", self.video_in,
+            "-of",
+            "json",
+            self.video_in,
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True,
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
             timeout=self.system_params.ffmpeg_timeout,
         )
         data = json.loads(result.stdout)
@@ -370,8 +420,10 @@ class FFmpegManager:
             frames = int(duration * nominal_fps)
 
         fps = FFmpegManager._resolve_render_fps(nominal_fps, frames, duration)
-        if (nominal_fps > 0
-                and abs(fps - nominal_fps) / nominal_fps > _FPS_LOG_TOLERANCE):
+        if (
+            nominal_fps > 0
+            and abs(fps - nominal_fps) / nominal_fps > _FPS_LOG_TOLERANCE
+        ):
             logger.info(
                 f"帧率口径修正: r_frame_rate {nominal_fps:.3f} → "
                 f"实测均值 {fps:.3f} (弹幕时间轴按实测值对齐)"
@@ -386,7 +438,9 @@ class FFmpegManager:
             "vfr": vfr,
         }
 
-    def build_command(self, fps: float, w: int, h: int, layer_params: LayerParams) -> list[str]:
+    def build_command(
+        self, fps: float, w: int, h: int, layer_params: LayerParams
+    ) -> list[str]:
         """构建 FFmpeg 命令"""
         if self.active_pipeline == EncodeMode.GPU:
             return self._build_gpu_command(fps, w, h, layer_params)
@@ -394,18 +448,30 @@ class FFmpegManager:
             return self._build_qsv_command(fps, w, h, layer_params)
         return self._build_cpu_command(fps, w, h, layer_params)
 
-    def _build_gpu_command(self, fps: float, w: int, h: int, lp: LayerParams) -> list[str]:
+    def _build_gpu_command(
+        self, fps: float, w: int, h: int, lp: LayerParams
+    ) -> list[str]:
         return [
-            "ffmpeg", "-y",
-            "-hwaccel", "cuda",
-            "-hwaccel_output_format", "cuda",
-            "-c:v", "h264_cuvid",
-            "-i", self.video_in,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgra",
-            "-s", f"{lp.layer_w}x{lp.layer_h}",
-            "-r", str(fps),
-            "-i", "pipe:0",
+            "ffmpeg",
+            "-y",
+            "-hwaccel",
+            "cuda",
+            "-hwaccel_output_format",
+            "cuda",
+            "-c:v",
+            "h264_cuvid",
+            "-i",
+            self.video_in,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-s",
+            f"{lp.layer_w}x{lp.layer_h}",
+            "-r",
+            str(fps),
+            "-i",
+            "pipe:0",
             "-filter_complex",
             (
                 f"[0:v]scale_cuda=w={w}:h={h}:format=yuv420p:interp_algo=lanczos,"
@@ -413,28 +479,47 @@ class FFmpegManager:
                 f"[1:v]format=yuva420p[fg];"
                 f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
             ),
-            "-map", "[out]",
-            "-map", "0:a?",
-            "-c:v", "h264_nvenc",
-            "-preset", self.encode_params.gpu_preset,
-            "-cq:v", str(self.encode_params.gpu_cq),
-            "-rc:v", "constqp",
-            "-c:a", "copy",
+            "-map",
+            "[out]",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            self.encode_params.gpu_preset,
+            "-cq:v",
+            str(self.encode_params.gpu_cq),
+            "-rc:v",
+            "constqp",
+            "-c:a",
+            "copy",
             self.video_out,
         ]
 
-    def _build_qsv_command(self, fps: float, w: int, h: int, lp: LayerParams) -> list[str]:
+    def _build_qsv_command(
+        self, fps: float, w: int, h: int, lp: LayerParams
+    ) -> list[str]:
         return [
-            "ffmpeg", "-y",
-            "-hwaccel", "qsv",
-            "-hwaccel_output_format", "qsv",
-            "-c:v", "h264_qsv",
-            "-i", self.video_in,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgra",
-            "-s", f"{lp.layer_w}x{lp.layer_h}",
-            "-r", str(fps),
-            "-i", "pipe:0",
+            "ffmpeg",
+            "-y",
+            "-hwaccel",
+            "qsv",
+            "-hwaccel_output_format",
+            "qsv",
+            "-c:v",
+            "h264_qsv",
+            "-i",
+            self.video_in,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-s",
+            f"{lp.layer_w}x{lp.layer_h}",
+            "-r",
+            str(fps),
+            "-i",
+            "pipe:0",
             "-filter_complex",
             (
                 f"[0:v]hwdownload,format=nv12,"
@@ -442,40 +527,62 @@ class FFmpegManager:
                 f"[1:v]format=yuva420p[fg];"
                 f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
             ),
-            "-map", "[out]",
-            "-map", "0:a?",
-            "-c:v", "h264_qsv",
-            "-preset", self.encode_params.qsv_preset,
-            "-global_quality", str(self.encode_params.qsv_quality),
-            "-c:a", "copy",
+            "-map",
+            "[out]",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "h264_qsv",
+            "-preset",
+            self.encode_params.qsv_preset,
+            "-global_quality",
+            str(self.encode_params.qsv_quality),
+            "-c:a",
+            "copy",
             self.video_out,
         ]
 
-    def _build_cpu_command(self, fps: float, w: int, h: int, lp: LayerParams) -> list[str]:
+    def _build_cpu_command(
+        self, fps: float, w: int, h: int, lp: LayerParams
+    ) -> list[str]:
         cpu_count = os.cpu_count() or 4
         encode_threads = max(1, cpu_count - self.encode_params.cpu_min_reserve_threads)
 
         return [
-            "ffmpeg", "-y",
-            "-i", self.video_in,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgra",
-            "-s", f"{lp.layer_w}x{lp.layer_h}",
-            "-r", str(fps),
-            "-i", "pipe:0",
+            "ffmpeg",
+            "-y",
+            "-i",
+            self.video_in,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-s",
+            f"{lp.layer_w}x{lp.layer_h}",
+            "-r",
+            str(fps),
+            "-i",
+            "pipe:0",
             "-filter_complex",
             (
                 f"[0:v]scale={w}:{h}:flags=lanczos[bg];"
                 f"[1:v]format=yuva420p[fg];"
                 f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
             ),
-            "-map", "[out]",
-            "-map", "0:a?",
-            "-c:v", "libx264",
-            "-preset", self.encode_params.cpu_preset,
-            "-crf", str(self.encode_params.cpu_crf),
-            "-threads", str(encode_threads),
-            "-c:a", "copy",
+            "-map",
+            "[out]",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            self.encode_params.cpu_preset,
+            "-crf",
+            str(self.encode_params.cpu_crf),
+            "-threads",
+            str(encode_threads),
+            "-c:a",
+            "copy",
             self.video_out,
         ]
 
@@ -493,7 +600,9 @@ class FFmpegManager:
             if proc is None or proc.stderr is None:
                 return
             stderr_text = TextIOWrapper(
-                proc.stderr, encoding="utf-8", errors="replace",
+                proc.stderr,
+                encoding="utf-8",
+                errors="replace",
             )
             try:
                 for line in stderr_text:
@@ -591,9 +700,7 @@ class FFmpegManager:
                 # （Windows 实测 code=255），只在 Python 侧中断则它按
                 # stdin EOF 正常收尾（code=0）。两者都不是「成功」也不是
                 # 「失败」，输出同样残缺，故统一按中断记，不用 ERROR。
-                logger.warning(
-                    f"编码已随中断结束 (code={return_code})，输出不完整"
-                )
+                logger.warning(f"编码已随中断结束 (code={return_code})，输出不完整")
             elif return_code == 0:
                 self.encode_succeeded = True
                 logger.success(f"压制完成: {self.video_out}")
@@ -616,6 +723,7 @@ class FFmpegManager:
 # =============================================================================
 # 模块级辅助函数
 # =============================================================================
+
 
 @functools.lru_cache(maxsize=None)
 def _probe_encode_pipeline(encode_mode: str, ffmpeg_exe: str, timeout: int) -> str:

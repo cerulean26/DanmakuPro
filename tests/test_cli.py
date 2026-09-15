@@ -20,17 +20,18 @@ def _patched_cli(*argv):
     Yields:
         (DanmakuBurner 的 mock 类, QApplication 的 mock 类)
     """
-    with patch("sys.argv", ["danmakupro", *argv]), \
-         patch("danmakupro.cli.load_config"), \
-         patch("danmakupro.cli.configure_logger"), \
-         patch("danmakupro.cli.ensure_qt_app"), \
-         patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-         patch("danmakupro.cli.QApplication") as mock_qapp:
+    with (
+        patch("sys.argv", ["danmakupro", *argv]),
+        patch("danmakupro.cli.load_config"),
+        patch("danmakupro.cli.configure_logger"),
+        patch("danmakupro.cli.ensure_qt_app"),
+        patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+        patch("danmakupro.cli.QApplication") as mock_qapp,
+    ):
         yield mock_burner_cls, mock_qapp
 
 
 class TestCLIMain:
-
     def test_help_exits(self):
         with patch("sys.argv", ["danmakupro", "--help"]):
             with pytest.raises(SystemExit):
@@ -47,13 +48,14 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml)]), \
-             patch("danmakupro.cli.load_config") as mock_load_config, \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml)]),
+            patch("danmakupro.cli.load_config") as mock_load_config,
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner_cls.return_value = mock_burner
             mock_load_config.return_value = MagicMock()
@@ -68,13 +70,14 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml), "-f"]), \
-             patch("danmakupro.cli.load_config") as mock_load_config, \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml), "-f"]),
+            patch("danmakupro.cli.load_config") as mock_load_config,
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner_cls.return_value = mock_burner
             mock_load_config.return_value = MagicMock()
@@ -89,13 +92,14 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml), "--encode", "cpu"]), \
-             patch("danmakupro.cli.load_config") as mock_load_config, \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml), "--encode", "cpu"]),
+            patch("danmakupro.cli.load_config") as mock_load_config,
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner_cls.return_value = mock_burner
             mock_load_config.return_value = MagicMock()
@@ -112,13 +116,16 @@ class TestCLIMain:
         out = tmp_path / "out.mp4"
         out.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml), "-o", str(out), "-f"]), \
-             patch("danmakupro.cli.load_config") as mock_load_config, \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch(
+                "sys.argv", ["danmakupro", str(video), str(xml), "-o", str(out), "-f"]
+            ),
+            patch("danmakupro.cli.load_config") as mock_load_config,
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner_cls.return_value = mock_burner
             mock_load_config.return_value = MagicMock()
@@ -135,13 +142,14 @@ class TestCLIMain:
         cfg = tmp_path / "config.yaml"
         cfg.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml), "-c", str(cfg)]), \
-             patch("danmakupro.cli.load_config") as mock_load_config, \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml), "-c", str(cfg)]),
+            patch("danmakupro.cli.load_config") as mock_load_config,
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner_cls.return_value = mock_burner
             mock_load_config.return_value = MagicMock()
@@ -157,15 +165,17 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml)]), \
-             patch("danmakupro.cli.load_config"), \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml)]),
+            patch("danmakupro.cli.load_config"),
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner_cls.side_effect = DanmakuProError(
-                "test error", ErrorCategory.INPUT,
+                "test error",
+                ErrorCategory.INPUT,
             )
             with pytest.raises(SystemExit):
                 main()
@@ -177,13 +187,14 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml)]), \
-             patch("danmakupro.cli.load_config"), \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml)]),
+            patch("danmakupro.cli.load_config"),
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner.run.side_effect = KeyboardInterrupt
             mock_burner_cls.return_value = mock_burner
@@ -197,13 +208,14 @@ class TestCLIMain:
         xml = tmp_path / "test.xml"
         xml.touch()
 
-        with patch("sys.argv", ["danmakupro", str(video), str(xml)]), \
-             patch("danmakupro.cli.load_config"), \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app"), \
-             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
-             patch("danmakupro.cli.QApplication"):
-
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml)]),
+            patch("danmakupro.cli.load_config"),
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls,
+            patch("danmakupro.cli.QApplication"),
+        ):
             mock_burner = MagicMock()
             mock_burner.run.side_effect = RuntimeError("boom")
             mock_burner_cls.return_value = mock_burner
@@ -268,7 +280,8 @@ class TestCLIErrorPaths:
         with _patched_cli("v.mp4", "d.xml", "--check") as (mock_cls, _):
             burner = MagicMock()
             burner.check.side_effect = DanmakuProError(
-                "缺素材", ErrorCategory.RESOURCE,
+                "缺素材",
+                ErrorCategory.RESOURCE,
             )
             mock_cls.return_value = burner
             with patch("danmakupro.cli.logger") as mock_logger:
@@ -320,8 +333,10 @@ class TestInitConfig:
 
     def _run(self, *argv):
         """在给定 argv 下跑 main()，返回 SystemExit 的退出码。"""
-        with patch("sys.argv", ["danmakupro", *argv]), \
-             patch("danmakupro.cli.configure_logger"):
+        with (
+            patch("sys.argv", ["danmakupro", *argv]),
+            patch("danmakupro.cli.configure_logger"),
+        ):
             with pytest.raises(SystemExit) as exc:
                 main()
         return exc.value.code
@@ -333,14 +348,18 @@ class TestInitConfig:
         target = tmp_path / "danmakupro.yaml"
         assert target.exists()
         # 生成的内容必须就是随包模板，而不是另写一份
-        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(encoding="utf-8")
+        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(
+            encoding="utf-8"
+        )
 
     def test_does_not_start_qt(self, tmp_path, monkeypatch):
         """纯文件操作，不应拉起 QApplication。"""
         monkeypatch.chdir(tmp_path)
-        with patch("sys.argv", ["danmakupro", "--init-config"]), \
-             patch("danmakupro.cli.configure_logger"), \
-             patch("danmakupro.cli.ensure_qt_app") as mock_qt:
+        with (
+            patch("sys.argv", ["danmakupro", "--init-config"]),
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app") as mock_qt,
+        ):
             with pytest.raises(SystemExit):
                 main()
         mock_qt.assert_not_called()
@@ -357,7 +376,9 @@ class TestInitConfig:
         target = tmp_path / "danmakupro.yaml"
         target.write_text("style:\n  font_size: 99\n", encoding="utf-8")
         assert self._run("--init-config", "-f") == 0
-        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(encoding="utf-8")
+        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(
+            encoding="utf-8"
+        )
 
     def test_config_flag_sets_destination(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

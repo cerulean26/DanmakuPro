@@ -20,14 +20,17 @@ def pipeline():
 # PipelineResult
 # =============================================================================
 
-class TestPipelineResult:
 
+class TestPipelineResult:
     def test_dataclass_fields(self):
         ctx = LayoutContext()
         result = PipelineResult(
-            text_spawned=10, gift_spawned=5,
-            layout_ctx=ctx, t_start=1.0,
-            total_text_danmaku=100, total_gift_danmaku=50,
+            text_spawned=10,
+            gift_spawned=5,
+            layout_ctx=ctx,
+            t_start=1.0,
+            total_text_danmaku=100,
+            total_gift_danmaku=50,
         )
         assert result.text_spawned == 10
         assert result.gift_spawned == 5
@@ -41,8 +44,8 @@ class TestPipelineResult:
 # RenderPipeline
 # =============================================================================
 
-class TestRenderPipeline:
 
+class TestRenderPipeline:
     def test_init(self, pipeline):
         assert pipeline._config is DEFAULT_CONFIG
 
@@ -59,10 +62,11 @@ class TestRenderPipeline:
 
         type(pipeline._frame_encoder).current_speed = PropertyMock(return_value=0.0)
 
-        with patch("danmakupro.core.pipeline.LayoutEngine") as mock_engine, \
-             patch("danmakupro.core.pipeline.DanmakuRenderer") as mock_renderer_cls, \
-             patch("danmakupro.core.pipeline.tqdm") as mock_tqdm:
-
+        with (
+            patch("danmakupro.core.pipeline.LayoutEngine") as mock_engine,
+            patch("danmakupro.core.pipeline.DanmakuRenderer") as mock_renderer_cls,
+            patch("danmakupro.core.pipeline.tqdm") as mock_tqdm,
+        ):
             mock_renderer = MagicMock()
             mock_renderer.get_frame_data.return_value = memoryview(b"data")
             mock_renderer_cls.return_value = mock_renderer
@@ -78,8 +82,12 @@ class TestRenderPipeline:
             pipeline._encode_frame = MagicMock()
 
             result = pipeline.run(
-                30, 10, events, layout_builder,
-                layout_params, layer_params,
+                30,
+                10,
+                events,
+                layout_builder,
+                layout_params,
+                layer_params,
             )
 
             assert isinstance(result, PipelineResult)
@@ -123,10 +131,11 @@ class TestRenderPipeline:
 
         type(pipeline._frame_encoder).current_speed = PropertyMock(return_value=0.0)
 
-        with patch("danmakupro.core.pipeline.LayoutEngine") as mock_engine, \
-             patch("danmakupro.core.pipeline.DanmakuRenderer") as mock_renderer_cls, \
-             patch("danmakupro.core.pipeline.tqdm") as mock_tqdm:
-
+        with (
+            patch("danmakupro.core.pipeline.LayoutEngine") as mock_engine,
+            patch("danmakupro.core.pipeline.DanmakuRenderer") as mock_renderer_cls,
+            patch("danmakupro.core.pipeline.tqdm") as mock_tqdm,
+        ):
             mock_renderer = MagicMock()
             mock_renderer.get_frame_data.return_value = memoryview(b"data")
             mock_renderer_cls.return_value = mock_renderer
@@ -142,8 +151,12 @@ class TestRenderPipeline:
             pipeline._encode_frame = MagicMock()
 
             result = pipeline.run(
-                30, 5, events, layout_builder,
-                layout_params, layer_params,
+                30,
+                5,
+                events,
+                layout_builder,
+                layout_params,
+                layer_params,
             )
 
             assert result.total_text_danmaku == 2

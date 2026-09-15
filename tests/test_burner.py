@@ -13,17 +13,20 @@ from danmakupro.input.event import DanmakuEvent
 
 @pytest.fixture
 def mock_deps():
-    with patch("danmakupro.core.burner.validate_video_input"), \
-         patch("danmakupro.core.burner.validate_xml_input"), \
-         patch("danmakupro.core.burner.validate_output_path"), \
-         patch("danmakupro.core.burner.AssetLoader"), \
-         patch("danmakupro.core.burner.FFmpegManager"):
+    with (
+        patch("danmakupro.core.burner.validate_video_input"),
+        patch("danmakupro.core.burner.validate_xml_input"),
+        patch("danmakupro.core.burner.validate_output_path"),
+        patch("danmakupro.core.burner.AssetLoader"),
+        patch("danmakupro.core.burner.FFmpegManager"),
+    ):
         yield
 
 
 # =============================================================================
 # 测试辅助
 # =============================================================================
+
 
 def _mk_resource(
     *,
@@ -64,8 +67,11 @@ def _make_run_burner(mock_deps, tmp_path):
     out.touch()
 
     burner = DanmakuBurner(
-        str(video), str(xml), video_out=str(out),
-        config=DEFAULT_CONFIG, force=True,
+        str(video),
+        str(xml),
+        video_out=str(out),
+        config=DEFAULT_CONFIG,
+        force=True,
     )
     encoder = MagicMock()
     encoder.get_video_info.return_value = _mk_vinfo()
@@ -78,10 +84,12 @@ def _make_run_burner(mock_deps, tmp_path):
 @contextmanager
 def _patch_run_deps(events, *, side_effect):
     """patch 掉 run() 的渲染依赖，并让 pipeline.run 抛出指定异常。"""
-    with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-         patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls, \
-         patch("danmakupro.core.burner.DanmakuLayoutBuilder"), \
-         patch("danmakupro.core.burner.LayoutEngine") as mock_engine:
+    with (
+        patch("danmakupro.core.burner.parse_xml", return_value=events),
+        patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls,
+        patch("danmakupro.core.burner.DanmakuLayoutBuilder"),
+        patch("danmakupro.core.burner.LayoutEngine") as mock_engine,
+    ):
         mock_engine.calculate_params.return_value = (MagicMock(), MagicMock())
         mock_pipeline = MagicMock()
         mock_pipeline.run.side_effect = side_effect
@@ -93,15 +101,18 @@ def _patch_run_deps(events, *, side_effect):
 # __init__
 # =============================================================================
 
-class TestBurnerInit:
 
+class TestBurnerInit:
     def test_default_output_path(self, mock_deps, tmp_path):
         video = tmp_path / "test.mp4"
         video.touch()
         xml = tmp_path / "test.xml"
         xml.touch()
         burner = DanmakuBurner(
-            str(video), str(xml), config=DEFAULT_CONFIG, force=True,
+            str(video),
+            str(xml),
+            config=DEFAULT_CONFIG,
+            force=True,
         )
         assert burner.video_out.endswith("-弹幕版.mp4")
         assert "test-弹幕版.mp4" in burner.video_out
@@ -114,8 +125,11 @@ class TestBurnerInit:
         out = tmp_path / "custom.mp4"
         out.touch()
         burner = DanmakuBurner(
-            str(video), str(xml), video_out=str(out),
-            config=DEFAULT_CONFIG, force=True,
+            str(video),
+            str(xml),
+            video_out=str(out),
+            config=DEFAULT_CONFIG,
+            force=True,
         )
         assert burner.video_out.endswith("custom.mp4")
 
@@ -125,7 +139,10 @@ class TestBurnerInit:
         xml = tmp_path / "test.xml"
         xml.touch()
         burner = DanmakuBurner(
-            str(video), str(xml), config=DEFAULT_CONFIG, force=True,
+            str(video),
+            str(xml),
+            config=DEFAULT_CONFIG,
+            force=True,
         )
         assert burner._asset_provider is not None
         assert burner._frame_encoder is not None
@@ -135,15 +152,20 @@ class TestBurnerInit:
 # _warn_unspawned
 # =============================================================================
 
-class TestWarnUnspawned:
 
+class TestWarnUnspawned:
     def test_no_unspawned(self):
         events = [
             DanmakuEvent(time=0.5, user="u1", text="t1"),
         ]
         with patch("danmakupro.core.burner.logger") as mock_logger:
             DanmakuBurner._warn_unspawned(
-                events, 1, 10.0, "文本弹幕", 1, 1,
+                events,
+                1,
+                10.0,
+                "文本弹幕",
+                1,
+                1,
             )
             call_args = mock_logger.warning.call_args[0][0]
             assert "文本弹幕未完全发射: 1/1" in call_args
@@ -155,7 +177,12 @@ class TestWarnUnspawned:
         ]
         with patch("danmakupro.core.burner.logger") as mock_logger:
             DanmakuBurner._warn_unspawned(
-                events, 1, 10.0, "文本弹幕", 1, 2,
+                events,
+                1,
+                10.0,
+                "文本弹幕",
+                1,
+                2,
             )
             call_args = mock_logger.warning.call_args[0][0]
             assert "文本弹幕未完全发射" in call_args
@@ -163,12 +190,31 @@ class TestWarnUnspawned:
 
     def test_unspawned_blocked(self):
         events = [
-            DanmakuEvent(time=0.5, user="u1", text="t1", is_gift=True, gift_name="g", gift_count=1),
-            DanmakuEvent(time=5.0, user="u2", text="t2", is_gift=True, gift_name="g", gift_count=1),
+            DanmakuEvent(
+                time=0.5,
+                user="u1",
+                text="t1",
+                is_gift=True,
+                gift_name="g",
+                gift_count=1,
+            ),
+            DanmakuEvent(
+                time=5.0,
+                user="u2",
+                text="t2",
+                is_gift=True,
+                gift_name="g",
+                gift_count=1,
+            ),
         ]
         with patch("danmakupro.core.burner.logger") as mock_logger:
             DanmakuBurner._warn_unspawned(
-                events, 1, 10.0, "礼物弹幕", 1, 10,
+                events,
+                1,
+                10.0,
+                "礼物弹幕",
+                1,
+                10,
             )
             call_args = mock_logger.warning.call_args[0][0]
             assert "礼物弹幕未完全发射" in call_args
@@ -179,19 +225,34 @@ class TestWarnUnspawned:
 # _report_completion_stats
 # =============================================================================
 
-class TestReportCompletionStats:
 
+class TestReportCompletionStats:
     def test_all_spawned(self):
         events = [
             DanmakuEvent(time=0.5, user="u1", text="t1"),
-            DanmakuEvent(time=1.0, user="u2", text="t2", is_gift=True, gift_name="g", gift_count=1),
+            DanmakuEvent(
+                time=1.0,
+                user="u2",
+                text="t2",
+                is_gift=True,
+                gift_name="g",
+                gift_count=1,
+            ),
         ]
         ctx = MagicMock()
         ctx.text_event_idx = 1
         ctx.gift_event_idx = 2
         with patch("danmakupro.core.burner.logger") as mock_logger:
             DanmakuBurner._report_completion_stats(
-                events, ctx, 30, 300, 1, 1, 1, 1, 0.0,
+                events,
+                ctx,
+                30,
+                300,
+                1,
+                1,
+                1,
+                1,
+                0.0,
             )
             mock_logger.info.assert_called_once()
 
@@ -205,7 +266,15 @@ class TestReportCompletionStats:
         ctx.gift_event_idx = 0
         with patch("danmakupro.core.burner.logger") as mock_logger:
             DanmakuBurner._report_completion_stats(
-                events, ctx, 30, 300, 1, 2, 0, 0, 0.0,
+                events,
+                ctx,
+                30,
+                300,
+                1,
+                2,
+                0,
+                0,
+                0.0,
             )
             assert mock_logger.warning.called
 
@@ -214,8 +283,8 @@ class TestReportCompletionStats:
 # run
 # =============================================================================
 
-class TestBurnerRun:
 
+class TestBurnerRun:
     def test_run_flow(self, mock_deps, tmp_path):
         video = tmp_path / "test.mp4"
         video.touch()
@@ -227,28 +296,39 @@ class TestBurnerRun:
         events = [DanmakuEvent(time=0.5, user="u", text="hello")]
         mock_encoder = MagicMock()
         mock_encoder.get_video_info.return_value = {
-            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
+            "w": 1920,
+            "h": 1080,
+            "fps": 30,
+            "frames": 300,
+            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 
-        with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-             patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls, \
-             patch("danmakupro.core.burner.DanmakuLayoutBuilder"), \
-             patch("danmakupro.core.burner.LayoutEngine") as mock_engine, \
-             patch.object(DanmakuBurner, "_report_completion_stats"):
-
+        with (
+            patch("danmakupro.core.burner.parse_xml", return_value=events),
+            patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls,
+            patch("danmakupro.core.burner.DanmakuLayoutBuilder"),
+            patch("danmakupro.core.burner.LayoutEngine") as mock_engine,
+            patch.object(DanmakuBurner, "_report_completion_stats"),
+        ):
             mock_engine.calculate_params.return_value = (MagicMock(), MagicMock())
             mock_pipeline = MagicMock()
             mock_pipeline.run.return_value = MagicMock(
-                text_spawned=1, gift_spawned=0,
-                layout_ctx=MagicMock(), t_start=0.0,
-                total_text_danmaku=1, total_gift_danmaku=0,
+                text_spawned=1,
+                gift_spawned=0,
+                layout_ctx=MagicMock(),
+                t_start=0.0,
+                total_text_danmaku=1,
+                total_gift_danmaku=0,
             )
             mock_pipeline_cls.return_value = mock_pipeline
 
             burner = DanmakuBurner(
-                str(video), str(xml), video_out=str(out),
-                config=DEFAULT_CONFIG, force=True,
+                str(video),
+                str(xml),
+                video_out=str(out),
+                config=DEFAULT_CONFIG,
+                force=True,
             )
             burner._frame_encoder = mock_encoder
             burner.run()
@@ -268,23 +348,31 @@ class TestBurnerRun:
         events = [DanmakuEvent(time=0.5, user="u", text="hello")]
         mock_encoder = MagicMock()
         mock_encoder.get_video_info.return_value = {
-            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
+            "w": 1920,
+            "h": 1080,
+            "fps": 30,
+            "frames": 300,
+            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 
-        with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-             patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls, \
-             patch("danmakupro.core.burner.DanmakuLayoutBuilder"), \
-             patch("danmakupro.core.burner.LayoutEngine") as mock_engine:
-
+        with (
+            patch("danmakupro.core.burner.parse_xml", return_value=events),
+            patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls,
+            patch("danmakupro.core.burner.DanmakuLayoutBuilder"),
+            patch("danmakupro.core.burner.LayoutEngine") as mock_engine,
+        ):
             mock_engine.calculate_params.return_value = (MagicMock(), MagicMock())
             mock_pipeline = MagicMock()
             mock_pipeline.run.side_effect = KeyboardInterrupt
             mock_pipeline_cls.return_value = mock_pipeline
 
             burner = DanmakuBurner(
-                str(video), str(xml), video_out=str(out),
-                config=DEFAULT_CONFIG, force=True,
+                str(video),
+                str(xml),
+                video_out=str(out),
+                config=DEFAULT_CONFIG,
+                force=True,
             )
             burner._frame_encoder = mock_encoder
             # 中断必须继续上抛：吞掉它会让进程以 0 退出，调用方无法区分
@@ -297,7 +385,9 @@ class TestBurnerRun:
             assert not out.exists()
 
     def test_discards_output_when_interrupt_hits_cleanup(
-        self, mock_deps, tmp_path,
+        self,
+        mock_deps,
+        tmp_path,
     ):
         """中断恰好落在收尾期间时，产物清理不能被跳过。
 
@@ -316,25 +406,33 @@ class TestBurnerRun:
         events = [DanmakuEvent(time=0.5, user="u", text="hello")]
         mock_encoder = MagicMock()
         mock_encoder.get_video_info.return_value = {
-            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
+            "w": 1920,
+            "h": 1080,
+            "fps": 30,
+            "frames": 300,
+            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
         # 模拟中断在收尾期间抵达
         mock_encoder.cleanup.side_effect = KeyboardInterrupt
 
-        with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-             patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls, \
-             patch("danmakupro.core.burner.DanmakuLayoutBuilder"), \
-             patch("danmakupro.core.burner.LayoutEngine") as mock_engine:
-
+        with (
+            patch("danmakupro.core.burner.parse_xml", return_value=events),
+            patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls,
+            patch("danmakupro.core.burner.DanmakuLayoutBuilder"),
+            patch("danmakupro.core.burner.LayoutEngine") as mock_engine,
+        ):
             mock_engine.calculate_params.return_value = (MagicMock(), MagicMock())
             mock_pipeline = MagicMock()
             mock_pipeline.run.side_effect = KeyboardInterrupt
             mock_pipeline_cls.return_value = mock_pipeline
 
             burner = DanmakuBurner(
-                str(video), str(xml), video_out=str(out),
-                config=DEFAULT_CONFIG, force=True,
+                str(video),
+                str(xml),
+                video_out=str(out),
+                config=DEFAULT_CONFIG,
+                force=True,
             )
             burner._frame_encoder = mock_encoder
             with pytest.raises(KeyboardInterrupt):
@@ -378,16 +476,19 @@ class TestBurnerRun:
 # _discard_incomplete_output
 # =============================================================================
 
-class TestDiscardIncompleteOutput:
 
+class TestDiscardIncompleteOutput:
     def _make_burner(self, mock_deps, tmp_path, out_name):
         video = tmp_path / "test.mp4"
         video.touch()
         xml = tmp_path / "test.xml"
         xml.touch()
         return DanmakuBurner(
-            str(video), str(xml), video_out=str(tmp_path / out_name),
-            config=DEFAULT_CONFIG, force=True,
+            str(video),
+            str(xml),
+            video_out=str(tmp_path / out_name),
+            config=DEFAULT_CONFIG,
+            force=True,
         )
 
     def test_missing_file_is_noop(self, mock_deps, tmp_path):
@@ -402,8 +503,10 @@ class TestDiscardIncompleteOutput:
         out = tmp_path / "out.mp4"
         out.touch()
 
-        with patch("pathlib.Path.unlink", side_effect=OSError("拒绝访问")), \
-             patch("danmakupro.core.burner.logger") as mock_logger:
+        with (
+            patch("pathlib.Path.unlink", side_effect=OSError("拒绝访问")),
+            patch("danmakupro.core.burner.logger") as mock_logger,
+        ):
             burner._discard_incomplete_output()
 
             assert "无法删除" in mock_logger.warning.call_args[0][0]
@@ -415,16 +518,19 @@ class TestDiscardIncompleteOutput:
 # check
 # =============================================================================
 
+
 def _text_events(count, *, step=1.0):
-    return [
-        DanmakuEvent(time=i * step, user="u", text=f"t{i}")
-        for i in range(count)
-    ]
+    return [DanmakuEvent(time=i * step, user="u", text=f"t{i}") for i in range(count)]
 
 
 def _gift_event(t=1.5):
     return DanmakuEvent(
-        time=t, user="u", text="", is_gift=True, gift_name="火箭", gift_count=1,
+        time=t,
+        user="u",
+        text="",
+        is_gift=True,
+        gift_name="火箭",
+        gift_count=1,
     )
 
 
@@ -438,8 +544,11 @@ def make_check_burner(mock_deps, tmp_path):
         xml = tmp_path / "test.xml"
         xml.touch()
         burner = DanmakuBurner(
-            str(video), str(xml), video_out=str(tmp_path / "out.mp4"),
-            config=config, force=True,
+            str(video),
+            str(xml),
+            video_out=str(tmp_path / "out.mp4"),
+            config=config,
+            force=True,
         )
         encoder = MagicMock()
         encoder.get_video_info.return_value = v_info
@@ -453,8 +562,10 @@ def make_check_burner(mock_deps, tmp_path):
 
 def _run_check(burner, events):
     """跑一次 check()，返回报告的行列表（check 把整份报告拼成单条日志）。"""
-    with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-         patch("danmakupro.core.burner.logger") as mock_logger:
+    with (
+        patch("danmakupro.core.burner.parse_xml", return_value=events),
+        patch("danmakupro.core.burner.logger") as mock_logger,
+    ):
         burner.check()
         raw = mock_logger.opt.return_value.info.call_args[0][0]
     return raw.split("\n")
@@ -469,7 +580,6 @@ def _verdict_line(lines, prefix):
 
 
 class TestCheck:
-
     def test_all_clean(self, make_check_burner):
         events = [
             DanmakuEvent(time=0.5, user="u1", text="hello"),
@@ -478,7 +588,9 @@ class TestCheck:
         ]
         burner = make_check_burner(
             events=events,
-            resource=_mk_resource(used_emoji=["微笑"], used_gift=["火箭"], total_chars=8),
+            resource=_mk_resource(
+                used_emoji=["微笑"], used_gift=["火箭"], total_chars=8
+            ),
             v_info=_mk_vinfo(),
         )
 
@@ -519,7 +631,9 @@ class TestCheck:
     def test_unused_assets_reported(self, make_check_burner):
         events = [DanmakuEvent(time=0.5, user="u1", text="hi")]
         burner = make_check_burner(
-            events=events, resource=_mk_resource(), v_info=_mk_vinfo(),
+            events=events,
+            resource=_mk_resource(),
+            v_info=_mk_vinfo(),
         )
 
         text = "\n".join(_run_check(burner, events))
@@ -529,7 +643,9 @@ class TestCheck:
 
     def test_empty_events(self, make_check_burner):
         burner = make_check_burner(
-            events=[], resource=_mk_resource(), v_info=_mk_vinfo(),
+            events=[],
+            resource=_mk_resource(),
+            v_info=_mk_vinfo(),
         )
 
         text = "\n".join(_run_check(burner, []))
@@ -541,7 +657,9 @@ class TestCheck:
     def test_unknown_pipeline_label_passthrough(self, make_check_burner):
         events = [DanmakuEvent(time=0.5, user="u1", text="hi")]
         burner = make_check_burner(
-            events=events, resource=_mk_resource(), v_info=_mk_vinfo(),
+            events=events,
+            resource=_mk_resource(),
+            v_info=_mk_vinfo(),
             pipeline="weird-pipeline",
         )
 
@@ -596,7 +714,9 @@ class TestCheck:
     def test_zero_duration_does_not_crash(self, make_check_burner):
         events = [DanmakuEvent(time=0.5, user="u1", text="hi")]
         burner = make_check_burner(
-            events=events, resource=_mk_resource(), v_info=_mk_vinfo(frames=0),
+            events=events,
+            resource=_mk_resource(),
+            v_info=_mk_vinfo(frames=0),
         )
 
         lines = _run_check(burner, events)
@@ -608,11 +728,15 @@ class TestCheck:
         """VFR 素材要给出提示：帧率口径已修正，但画面观感可能顿挫。"""
         events = [DanmakuEvent(time=0.5, user="u1", text="hi")]
         burner = make_check_burner(
-            events=events, resource=_mk_resource(), v_info=_mk_vinfo(vfr=True),
+            events=events,
+            resource=_mk_resource(),
+            v_info=_mk_vinfo(vfr=True),
         )
 
-        with patch("danmakupro.core.burner.parse_xml", return_value=events), \
-             patch("danmakupro.core.burner.logger") as mock_logger:
+        with (
+            patch("danmakupro.core.burner.parse_xml", return_value=events),
+            patch("danmakupro.core.burner.logger") as mock_logger,
+        ):
             burner.check()
             warnings = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
 

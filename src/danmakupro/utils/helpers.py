@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 
 # Emoji 标记正则表达式
-EMOJI_PATTERN = re.compile(r'\[([^\]]+)\]')
+EMOJI_PATTERN = re.compile(r"\[([^\]]+)\]")
 
 
 def extract_emoji_names(text: str) -> list[str]:

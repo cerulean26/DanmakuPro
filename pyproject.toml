@@ -65,18 +65,22 @@ markers = [
 # 覆盖率阈值统一在此处定义，命令行不要再传 --cov-fail-under，
 # 否则两处阈值会不一致、且本地跑 pytest 时不起作用。
 #
-# 以下数字均为 2026-09-15 实测（pytest tests/ -m "not gpu and not slow"）：
-#   总体 96.98%（1587 条语句 / 48 条未覆盖），388 passed
-#   已满覆盖（100%）的主要模块：encode/ffmpeg.py(278)、core/burner.py(195)、
-#     layout/engine.py(151)、config/models.py(115)、cli.py(78)、errors.py(70)、
-#     config/loader.py(64)、core/pipeline.py(61)、input/parser.py(37)、
-#     utils/validation.py(33)
-#   剩余薄弱点：render/assets.py 81%(21/111)、render/layout_builder.py 91%(17/189)、
-#     __init__.py 64%(5/14)、logger_config.py 83%(4/24)、utils/helpers.py 92%(1/12)
+# 以下数字均为 2026-09-16 实测（pytest tests/ -m "not gpu and not slow"，
+# 与 CI 同口径；含 slow 的完整套件同为 392 passed）：
+#   总体 97.10%（1587 条语句 / 46 条未覆盖），392 passed
+#   28 个模块中 23 个满覆盖，主要大模块全部在内：encode/ffmpeg.py(278)、
+#     core/burner.py(195)、layout/engine.py(151)、config/models.py(115)、
+#     cli.py(78)、errors.py(70)、config/loader.py(64)、core/pipeline.py(61)、
+#     input/parser.py(37)、utils/validation.py(33)
+#   剩余薄弱点（5 个）：render/assets.py 81%(21/111)、
+#     render/layout_builder.py 92%(15/189)、logger_config.py 83%(4/24)、
+#     __init__.py 64%(5/14)、utils/helpers.py 92%(1/12)
 #
-# fail_under = 85 的实际余量：未覆盖语句还可再增加 190 条（48 -> 238）才报警。
-# 余量偏大 —— 单模块整块失守已无法触发报警（assets.py 全失守后为 91.3%）。
-# 建议在确认后提到 90（余量 110 条，日常迭代仍安全）或 95（余量 31 条，偏严格）。
+# fail_under = 85 的实际余量：未覆盖语句还可再增加 192 条（46 -> 238）才报警。
+# 余量偏大 —— 只有大模块整块失守才可能触发报警：encode/ffmpeg.py 全失守会降到
+# 79.58%，而 render/assets.py 全失守仍有 91.43%、render/layout_builder.py
+# 全失守仍有 86.14%，两者都不报警。
+# 建议在确认后提到 90（余量 112 条，日常迭代仍安全）或 95（余量 33 条，偏严格）。
 # 阈值调整属质量门禁变更，未经确认前保持 85。
 [tool.coverage.report]
 fail_under = 85

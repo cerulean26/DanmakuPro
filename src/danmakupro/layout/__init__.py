@@ -9,6 +9,8 @@ from .params import LayoutParams, LayerParams
 
 __all__ = [
     "ActiveDanmaku",
-    "LayoutEngine", "LayoutContext",
-    "LayoutParams", "LayerParams",
+    "LayoutEngine",
+    "LayoutContext",
+    "LayoutParams",
+    "LayerParams",
 ]

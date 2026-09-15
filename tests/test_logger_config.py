@@ -6,7 +6,6 @@ from danmakupro.logger_config import configure_logger
 
 
 class TestConfigureLogger:
-
     def test_removes_existing_handlers(self):
         mock_logger = MagicMock()
         with patch("danmakupro.logger_config.logger", mock_logger):

@@ -257,13 +257,18 @@ DanmakuPro/
 
 ### 质量门禁
 
-与 CI 完全一致的三条命令（`ci.yml` 的扫描范围就是 `src/` 与 `tests/`）：
+与 CI 完全一致的四条命令（`ci.yml` 的扫描范围就是 `src/` 与 `tests/`）：
 
 ```bash
 uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
 uv run pyright src/
 uv run pytest tests/ -m "not gpu and not slow"
 ```
+
+`ruff check` 与 `ruff format` 管的是两件事：前者是静态分析（找可疑写法），
+后者只管排版。只跑 `format` 而不在 CI 卡住，下一个提交就会重新漂移，
+所以这两条必须成对出现。
 
 覆盖率阈值由 `pyproject.toml` 的 `[tool.coverage.report] fail_under` 提供，
 不要在命令行再传 `--cov-fail-under`。测试套件不依赖 `assets/`、`source/`

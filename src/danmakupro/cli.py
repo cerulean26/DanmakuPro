@@ -1,6 +1,6 @@
 """命令行入口模块
 
-用法: danmakupro video.mp4 danmaku.xml 
+用法: danmakupro video.mp4 danmaku.xml
      danmakupro source/5.flv source/5.xml --encode gpu --config ./danmakupro.yaml -f
 """
 
@@ -53,7 +53,9 @@ def init_config(dest: str | None = None, force: bool = False) -> int:
         logger.error("生成配置模板失败: {} - {}", target, e)
         return 1
     logger.info("已生成配置模板: {}", target.resolve())
-    logger.info("按需修改后重新运行即可生效（当前目录下的 danmakupro.yaml 会被自动加载）")
+    logger.info(
+        "按需修改后重新运行即可生效（当前目录下的 danmakupro.yaml 会被自动加载）"
+    )
     return 0
 
 
@@ -80,19 +82,28 @@ def main() -> None:
         help="编码模式",
     )
     parser.add_argument(
-        "-c", "--config", default=None,
+        "-c",
+        "--config",
+        default=None,
         help="配置文件路径（配合 --init-config 时表示模板生成路径）",
     )
     parser.add_argument(
-        "-f", "--force", action="store_true", default=False,
+        "-f",
+        "--force",
+        action="store_true",
+        default=False,
         help="强制覆盖已存在的输出文件（配合 --init-config 时为覆盖已有配置）",
     )
     parser.add_argument(
-        "--check", action="store_true", default=False,
+        "--check",
+        action="store_true",
+        default=False,
         help="仅检查资源完整性，不执行压制（字体/图片覆盖率、视频信息）",
     )
     parser.add_argument(
-        "--init-config", action="store_true", default=False,
+        "--init-config",
+        action="store_true",
+        default=False,
         help="在当前目录生成配置模板 danmakupro.yaml 后退出",
     )
     args = parser.parse_args()
@@ -102,16 +113,22 @@ def main() -> None:
         raise SystemExit(init_config(args.config, args.force))
 
     if not args.video or not args.xml:
-        parser.error("需要同时提供 video 与 xml 参数（或用 --init-config 生成配置模板）")
+        parser.error(
+            "需要同时提供 video 与 xml 参数（或用 --init-config 生成配置模板）"
+        )
 
     ensure_qt_app()
     config = load_config(args.config)
     # 捕获创建Burner时的异常，避免程序崩溃
     try:
         burner = DanmakuBurner(
-            video_in=args.video, xml_in=args.xml,
-            video_out=args.output, encode_mode=args.encode,
-            config=config, force=args.force, check_only=args.check,
+            video_in=args.video,
+            xml_in=args.xml,
+            video_out=args.output,
+            encode_mode=args.encode,
+            config=config,
+            force=args.force,
+            check_only=args.check,
         )
     except DanmakuProError as e:
         logger.error(f"[{e.category.value}] {e}")

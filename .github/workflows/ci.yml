@@ -24,6 +24,12 @@ jobs:
       - name: Run ruff
         run: uv run ruff check src/ tests/
 
+      # 格式检查与 lint 是两件事：ruff check 找可疑写法，ruff format 只管排版。
+      # 只在本地跑过 format 而不在 CI 卡住，下一个提交就会重新漂移，
+      # 所以这两条必须成对出现。
+      - name: Check formatting
+        run: uv run ruff format --check src/ tests/
+
       - name: Run pyright
         run: uv run pyright src/
 
@@ -47,7 +53,8 @@ jobs:
       # 测试套件不依赖真实 ffmpeg / ffprobe / GPU。所有外部调用均以
       # patch("subprocess.run") / patch("shutil.which") 隔离，探测函数体照常执行、
       # 但子进程是假的。把 PATH 剥到只剩系统目录（which 不到 ffmpeg/ffprobe）
-      # 后重跑，结果仍为 279 passed、1424/167 = 88.27%，与正常环境逐位一致。
+      # 后重跑，结果与正常环境逐位一致（那次实验时套件为 279 passed、
+      # 1424/167 = 88.27%；套件此后增长，2026-09-16 为 392 passed / 97.10%）。
       # 故 CI（无 NVIDIA GPU）的覆盖率应等于本地，阈值 85 无需按 CI 数字复核。
       #
       # -m "not gpu and not slow"：排除真机端到端用例。

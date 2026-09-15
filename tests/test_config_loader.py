@@ -1,18 +1,26 @@
 import pytest
 import yaml
 from danmakupro.config.loader import (
-    _is_dataclass_type, _warn_type_mismatch, _dict_to_config,
-    _config_priority_paths, load_config,
+    _is_dataclass_type,
+    _warn_type_mismatch,
+    _dict_to_config,
+    _config_priority_paths,
+    load_config,
 )
-from danmakupro.config.models import DanmakuConfig, AnimationParams, LayoutStyle, DEFAULT_CONFIG
+from danmakupro.config.models import (
+    DanmakuConfig,
+    AnimationParams,
+    LayoutStyle,
+    DEFAULT_CONFIG,
+)
 
 
 # =============================================================================
 # _is_dataclass_type
 # =============================================================================
 
-class TestIsDataclassType:
 
+class TestIsDataclassType:
     def test_dataclass_returns_true(self):
         assert _is_dataclass_type(AnimationParams) is True
 
@@ -29,8 +37,8 @@ class TestIsDataclassType:
 # _warn_type_mismatch
 # =============================================================================
 
-class TestWarnTypeMismatch:
 
+class TestWarnTypeMismatch:
     def test_bool_does_not_raise(self):
         _warn_type_mismatch(True, "system.enabled")
         _warn_type_mismatch(False, "style.fade_out")
@@ -46,8 +54,8 @@ class TestWarnTypeMismatch:
 # _config_priority_paths
 # =============================================================================
 
-class TestConfigPriorityPaths:
 
+class TestConfigPriorityPaths:
     def test_no_arg_returns_two_paths(self):
         paths = _config_priority_paths()
         assert len(paths) == 2
@@ -62,8 +70,8 @@ class TestConfigPriorityPaths:
 # _dict_to_config
 # =============================================================================
 
-class TestDictToConfig:
 
+class TestDictToConfig:
     def test_returns_default_on_empty(self):
         cfg = _dict_to_config({}, DanmakuConfig)
         assert isinstance(cfg, DanmakuConfig)
@@ -91,8 +99,8 @@ class TestDictToConfig:
 # load_config
 # =============================================================================
 
-class TestLoadConfig:
 
+class TestLoadConfig:
     def test_no_file_returns_default(self):
         cfg = load_config("/nonexistent/config.yaml")
         assert isinstance(cfg, DanmakuConfig)
@@ -135,6 +143,7 @@ class TestLoadConfig:
 # 配置来源可见性
 # =============================================================================
 
+
 @pytest.fixture
 def log_messages():
     """收集 loguru 的日志文本（loguru 不经过标准 logging，caplog 抓不到）。"""
@@ -170,7 +179,9 @@ class TestConfigSourceVisibility:
         assert cfg is DEFAULT_CONFIG
         assert any("内置默认值" in m for m in log_messages)
 
-    def test_warns_when_explicit_path_missing(self, monkeypatch, tmp_path, log_messages):
+    def test_warns_when_explicit_path_missing(
+        self, monkeypatch, tmp_path, log_messages
+    ):
         """`-c typo.yaml` 不应静默回退到别的配置。"""
         missing = tmp_path / "typo.yaml"
         monkeypatch.setattr(
@@ -180,7 +191,9 @@ class TestConfigSourceVisibility:
         load_config(str(missing))
         assert any("指定的配置文件不存在" in m for m in log_messages)
 
-    def test_no_warning_when_auto_search_misses(self, monkeypatch, tmp_path, log_messages):
+    def test_no_warning_when_auto_search_misses(
+        self, monkeypatch, tmp_path, log_messages
+    ):
         """未显式指定时找不到文件属正常情况，不应告警。"""
         monkeypatch.setattr(
             "danmakupro.config.loader._config_priority_paths",

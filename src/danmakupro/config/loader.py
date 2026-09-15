@@ -19,6 +19,7 @@ from .models import DanmakuConfig, DEFAULT_CONFIG
 # 辅助函数
 # =============================================================================
 
+
 def _is_dataclass_type(tp: Any) -> bool:
     """检查类型是否为 dataclass"""
     if isinstance(tp, str):
@@ -31,6 +32,7 @@ def _is_dataclass_type(tp: Any) -> bool:
 # =============================================================================
 # 配置搜索路径
 # =============================================================================
+
 
 def _config_priority_paths(config_path: str | Path | None = None) -> list[Path]:
     """按优先级返回配置文件候选路径（多选一，不合并）。
@@ -50,6 +52,7 @@ def _config_priority_paths(config_path: str | Path | None = None) -> list[Path]:
 # 配置转换
 # =============================================================================
 
+
 def _warn_type_mismatch(value: Any, field_path: str) -> None:
     """对 YAML 解析后常见的类型陷阱发出预警。
 
@@ -60,8 +63,9 @@ def _warn_type_mismatch(value: Any, field_path: str) -> None:
     # YAML 把 "no"/"yes"/"on"/"off" 解析为 bool 是常见坑
     if isinstance(value, bool):
         logger.warning(
-            "{}: 值为布尔 {}，如果你本意是字符串，请加引号包裹（如 \"yes\"）",
-            field_path, value,
+            '{}: 值为布尔 {}，如果你本意是字符串，请加引号包裹（如 "yes"）',
+            field_path,
+            value,
         )
     # 纯数字字符串被解析为 int/float 通常符合预期，不警告
     # 其他类型不匹配交给业务逻辑自然报错，此处不做强制校验

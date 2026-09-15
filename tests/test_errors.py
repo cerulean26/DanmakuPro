@@ -1,7 +1,14 @@
 from danmakupro.errors import (
-    ErrorCategory, ErrorContext, DanmakuProError,
-    InputError, ConfigError, RenderError, EncodeError, ResourceError,
-    ErrorHandler, handle_error,
+    ErrorCategory,
+    ErrorContext,
+    DanmakuProError,
+    InputError,
+    ConfigError,
+    RenderError,
+    EncodeError,
+    ResourceError,
+    ErrorHandler,
+    handle_error,
 )
 
 
@@ -9,8 +16,8 @@ from danmakupro.errors import (
 # ErrorContext
 # =============================================================================
 
-class TestErrorContext:
 
+class TestErrorContext:
     def test_default_values(self):
         ctx = ErrorContext()
         assert ctx.frame_idx is None
@@ -30,8 +37,8 @@ class TestErrorContext:
 # 自定义异常
 # =============================================================================
 
-class TestCustomExceptions:
 
+class TestCustomExceptions:
     def test_danmakupro_error(self):
         e = DanmakuProError("test msg")
         assert str(e) == "test msg"
@@ -76,8 +83,8 @@ class TestCustomExceptions:
 # ErrorHandler
 # =============================================================================
 
-class TestErrorHandler:
 
+class TestErrorHandler:
     def test_handle_danmakupro_error(self):
         e = InputError("input error", context=ErrorContext(frame_idx=10))
         ErrorHandler.handle(e)
@@ -121,8 +128,8 @@ class TestErrorHandler:
 # handle_error
 # =============================================================================
 
-class TestHandleError:
 
+class TestHandleError:
     def test_basic(self):
         handle_error(ValueError("bad"), component="test")
 

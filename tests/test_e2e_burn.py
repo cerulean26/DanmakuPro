@@ -62,7 +62,11 @@ pytestmark = [
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -70,18 +74,31 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 # Fixtures
 # =============================================================================
 
+
 @pytest.fixture(scope="module")
 def sample_video(tmp_path_factory) -> Path:
     """用 lavfi 合成一段 2 秒测试视频，不依赖仓库里的 source/ 素材。"""
     out = tmp_path_factory.mktemp("e2e") / "src.mp4"
-    r = _run([
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "lavfi",
-        "-i", f"testsrc=size={SRC_W}x{SRC_H}:rate={SRC_FPS}:duration={SRC_SECONDS}",
-        "-pix_fmt", "yuv420p",
-        "-c:v", "libx264", "-preset", "ultrafast",
-        str(out),
-    ])
+    r = _run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size={SRC_W}x{SRC_H}:rate={SRC_FPS}:duration={SRC_SECONDS}",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            str(out),
+        ]
+    )
     assert r.returncode == 0, f"合成测试视频失败:\n{r.stderr}"
     assert out.exists() and out.stat().st_size > 0
     return out
@@ -194,7 +211,8 @@ def log_sink():
 
     messages: list[str] = []
     sink_id = logger.add(
-        lambda m: messages.append(m.record["message"]), level="INFO",
+        lambda m: messages.append(m.record["message"]),
+        level="INFO",
     )
     try:
         yield messages
@@ -206,15 +224,25 @@ def log_sink():
 # 辅助断言函数
 # =============================================================================
 
+
 def _ffprobe(path: Path) -> tuple[dict, dict]:
     """返回 (视频流信息, 容器信息)。"""
-    r = _run([
-        "ffprobe", "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,nb_frames,codec_name,pix_fmt",
-        "-show_entries", "format=duration",
-        "-of", "json", str(path),
-    ])
+    r = _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,nb_frames,codec_name,pix_fmt",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(path),
+        ]
+    )
     assert r.returncode == 0, f"ffprobe 失败:\n{r.stderr}"
     data = json.loads(r.stdout)
     assert data.get("streams"), f"产物里没有视频流: {data}"
@@ -222,10 +250,22 @@ def _ffprobe(path: Path) -> tuple[dict, dict]:
 
 
 def _extract_png(video: Path, t: float, dest: Path) -> Path:
-    r = _run([
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", str(t), "-i", str(video), "-frames:v", "1", str(dest),
-    ])
+    r = _run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            str(t),
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            str(dest),
+        ]
+    )
     assert r.returncode == 0, f"抽帧失败 ({video} @ {t}s):\n{r.stderr}"
     return dest
 
@@ -262,11 +302,17 @@ def _mean_channel_diff(a: Path, b: Path, step: int = 2) -> float:
 # 用例
 # =============================================================================
 
+
 class TestEndToEndBurn:
     """真实压制链路。"""
 
     def test_cli_run_produces_playable_mp4(
-        self, qapp, sample_video, sample_xml, tmp_path, cli_config_yaml,
+        self,
+        qapp,
+        sample_video,
+        sample_xml,
+        tmp_path,
+        cli_config_yaml,
     ):
         """走完整 CLI 入口压制，产物必须是分辨率/帧数/时长都正确的可解码 mp4。
 
@@ -275,8 +321,15 @@ class TestEndToEndBurn:
         """
         out = tmp_path / "out.mp4"
         argv = [
-            "danmakupro", str(sample_video), str(sample_xml),
-            "-o", str(out), "--encode", "cpu", "-c", str(cli_config_yaml),
+            "danmakupro",
+            str(sample_video),
+            str(sample_xml),
+            "-o",
+            str(out),
+            "--encode",
+            "cpu",
+            "-c",
+            str(cli_config_yaml),
         ]
 
         # 只 patch cli 模块对 QApplication 的引用：main() 的 finally 会
@@ -302,8 +355,15 @@ class TestEndToEndBurn:
         )
 
     def test_burner_run_renders_danmaku_into_frames(
-        self, qapp, sample_video, sample_xml, empty_xml, late_event_xml,
-        tmp_path, log_sink, e2e_config,
+        self,
+        qapp,
+        sample_video,
+        sample_xml,
+        empty_xml,
+        late_event_xml,
+        tmp_path,
+        log_sink,
+        e2e_config,
     ):
         """弹幕必须真的画进画面、全部发射、且铺满整个视频时长。
 
@@ -321,8 +381,10 @@ class TestEndToEndBurn:
         """
         out = tmp_path / "burned.mp4"
         burner = DanmakuBurner(
-            video_in=str(sample_video), xml_in=str(sample_xml),
-            video_out=str(out), encode_mode="cpu",
+            video_in=str(sample_video),
+            xml_in=str(sample_xml),
+            video_out=str(out),
+            encode_mode="cpu",
             config=e2e_config,
         )
         burner.run()
@@ -342,8 +404,10 @@ class TestEndToEndBurn:
 
         control = tmp_path / "control.mp4"
         DanmakuBurner(
-            video_in=str(sample_video), xml_in=str(empty_xml),
-            video_out=str(control), encode_mode="cpu",
+            video_in=str(sample_video),
+            xml_in=str(empty_xml),
+            video_out=str(control),
+            encode_mode="cpu",
             config=e2e_config,
         ).run()
         assert control.exists() and control.stat().st_size > 0
@@ -380,8 +444,10 @@ class TestEndToEndBurn:
         # 见 late_event_xml 的说明：帧数断言抓不到「层被截短」，这一条才能。
         late = tmp_path / "late.mp4"
         DanmakuBurner(
-            video_in=str(sample_video), xml_in=str(late_event_xml),
-            video_out=str(late), encode_mode="cpu",
+            video_in=str(sample_video),
+            xml_in=str(late_event_xml),
+            video_out=str(late),
+            encode_mode="cpu",
             config=e2e_config,
         ).run()
 
@@ -393,7 +459,9 @@ class TestEndToEndBurn:
             _extract_png(late, 0.60, tmp_path / "late_early.png"),
             _extract_png(control, 0.60, tmp_path / "control_early.png"),
         )
-        print(f"[e2e 像素] 尾部事件: 1.90s={diff_late:.3f}, 0.60s={diff_late_early:.3f}")
+        print(
+            f"[e2e 像素] 尾部事件: 1.90s={diff_late:.3f}, 0.60s={diff_late_early:.3f}"
+        )
 
         assert diff_late > 1.0, (
             f"1.8s 的弹幕在 1.90s 没有出现在画面上（平均通道差 {diff_late:.3f}）。"
@@ -405,7 +473,12 @@ class TestEndToEndBurn:
         )
 
     def test_check_mode_reports_without_writing_output(
-        self, qapp, sample_video, sample_xml, tmp_path, e2e_config,
+        self,
+        qapp,
+        sample_video,
+        sample_xml,
+        tmp_path,
+        e2e_config,
     ):
         """`--check` 只出报告，绝不产出文件。
 
@@ -415,16 +488,24 @@ class TestEndToEndBurn:
         out = tmp_path / "never_created.mp4"
 
         burner = DanmakuBurner(
-            video_in=str(sample_video), xml_in=str(sample_xml),
-            video_out=str(out), encode_mode="cpu",
-            config=e2e_config, check_only=True,
+            video_in=str(sample_video),
+            xml_in=str(sample_xml),
+            video_out=str(out),
+            encode_mode="cpu",
+            config=e2e_config,
+            check_only=True,
         )
         burner.check()
 
         assert not out.exists(), "检查模式不应产生任何输出文件"
 
     def test_existing_output_is_rejected_without_force(
-        self, qapp, sample_video, sample_xml, tmp_path, e2e_config,
+        self,
+        qapp,
+        sample_video,
+        sample_xml,
+        tmp_path,
+        e2e_config,
     ):
         """输出已存在且未指定 force 时必须拒绝，避免误覆盖用户成片。"""
         from danmakupro.errors import InputError
@@ -434,8 +515,10 @@ class TestEndToEndBurn:
 
         with pytest.raises(InputError, match="已存在"):
             DanmakuBurner(
-                video_in=str(sample_video), xml_in=str(sample_xml),
-                video_out=str(out), encode_mode="cpu",
+                video_in=str(sample_video),
+                xml_in=str(sample_xml),
+                video_out=str(out),
+                encode_mode="cpu",
                 config=e2e_config,
             )
         # 原有文件必须原封不动

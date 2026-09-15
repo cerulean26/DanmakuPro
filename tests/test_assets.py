@@ -8,8 +8,8 @@ from danmakupro.input.event import DanmakuEvent
 # load_image_assets
 # =============================================================================
 
-class TestLoadImageAssets:
 
+class TestLoadImageAssets:
     def test_load_valid_png(self, tmp_path):
         emoji_dir = tmp_path / "emoji"
         emoji_dir.mkdir()
@@ -60,8 +60,8 @@ class TestLoadImageAssets:
 # AssetLoader
 # =============================================================================
 
-class TestAssetLoader:
 
+class TestAssetLoader:
     def test_creation_with_defaults(self, qapp):
         loader = AssetLoader()
         assert loader.font is not None
@@ -95,8 +95,14 @@ class TestAssetLoader:
         loader = AssetLoader(assets_dir=str(tmp_path))
         events = [
             DanmakuEvent(time=0, user="u", text="[微笑]"),
-            DanmakuEvent(time=1, user="u", text="火箭x1",
-                         is_gift=True, gift_name="火箭", gift_count=1),
+            DanmakuEvent(
+                time=1,
+                user="u",
+                text="火箭x1",
+                is_gift=True,
+                gift_name="火箭",
+                gift_count=1,
+            ),
         ]
         loader.load_assets(events)
 
@@ -107,8 +113,14 @@ class TestAssetLoader:
         loader = AssetLoader(assets_dir=str(tmp_path))
         events = [
             DanmakuEvent(time=0, user="u", text="[不存在]"),
-            DanmakuEvent(time=1, user="u", text="不存在x1",
-                         is_gift=True, gift_name="不存在", gift_count=1),
+            DanmakuEvent(
+                time=1,
+                user="u",
+                text="不存在x1",
+                is_gift=True,
+                gift_name="不存在",
+                gift_count=1,
+            ),
         ]
         loader.load_assets(events)
 

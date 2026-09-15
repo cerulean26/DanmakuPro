@@ -24,7 +24,7 @@ class ActiveDanmakuView:
     转发到内部的 ActiveDanmaku 实例。
     """
 
-    __slots__ = ('_dm', '_cached_image')
+    __slots__ = ("_dm", "_cached_image")
 
     def __init__(self, dm: ActiveDanmaku) -> None:
         self._dm = dm
@@ -34,7 +34,7 @@ class ActiveDanmakuView:
         return getattr(self._dm, name)
 
     def __setattr__(self, name: str, value) -> None:
-        if name in ('_dm', '_cached_image'):
+        if name in ("_dm", "_cached_image"):
             super().__setattr__(name, value)
         else:
             setattr(self._dm, name, value)

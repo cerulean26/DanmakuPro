@@ -9,7 +9,10 @@ from .renderer import DanmakuRenderer
 from .segments import RenderSegment, TextRow
 
 __all__ = [
-    "AssetLoader", "DanmakuRenderer",
-    "DanmakuLayout", "DanmakuLayoutBuilder",
-    "RenderSegment", "TextRow",
+    "AssetLoader",
+    "DanmakuRenderer",
+    "DanmakuLayout",
+    "DanmakuLayoutBuilder",
+    "RenderSegment",
+    "TextRow",
 ]

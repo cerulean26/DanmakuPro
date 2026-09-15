@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 @dataclass
 class PipelineResult:
     """渲染管线执行结果"""
+
     text_spawned: int
     gift_spawned: int
     layout_ctx: LayoutContext
@@ -94,7 +95,9 @@ class RenderPipeline:
         logger.complete()
 
         pbar = tqdm(
-            total=total_frames, desc="压制进度", unit="帧",
+            total=total_frames,
+            desc="压制进度",
+            unit="帧",
             bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]",
         )
 
@@ -110,40 +113,55 @@ class RenderPipeline:
 
                 text_has_new, gift_has_new, text_emitted, gift_emitted = (
                     LayoutEngine.spawn_new_danmakus(
-                        layout_ctx, current_time, events, active_text, active_gift,
-                        layout_builder, self._asset_provider, self._config.style,
+                        layout_ctx,
+                        current_time,
+                        events,
+                        active_text,
+                        active_gift,
+                        layout_builder,
+                        self._asset_provider,
+                        self._config.style,
                     )
                 )
                 total_text_spawned += text_emitted
                 total_gift_spawned += gift_emitted
 
                 LayoutEngine.update_danmaku_layer(
-                    active_text, text_has_new,
-                    layout_params.bottom, layout_params.text_top,
-                    layout_params.gap, anim.text_damping_factor,
+                    active_text,
+                    text_has_new,
+                    layout_params.bottom,
+                    layout_params.text_top,
+                    layout_params.gap,
+                    anim.text_damping_factor,
                 )
                 LayoutEngine.update_danmaku_layer(
-                    active_gift, gift_has_new,
-                    layout_params.text_top, layout_params.gift_top,
-                    layout_params.gap, anim.gift_damping_factor,
-                    current_time, anim.gift_dwell_time,
+                    active_gift,
+                    gift_has_new,
+                    layout_params.text_top,
+                    layout_params.gift_top,
+                    layout_params.gap,
+                    anim.gift_damping_factor,
+                    current_time,
+                    anim.gift_dwell_time,
                 )
 
                 renderer.render_frame(
-                    active_text, active_gift,
+                    active_text,
+                    active_gift,
                     layout_params,
                     fade_out_zone,
                 )
 
                 self._encode_frame(
-                    renderer, pbar, frame_idx, total_frames,
+                    renderer,
+                    pbar,
+                    frame_idx,
+                    total_frames,
                 )
 
                 if frame_idx % SPEED_UPDATE_INTERVAL == 0:
                     speed = self._frame_encoder.current_speed
-                    pbar.set_postfix(
-                        {"speed": f"{speed:.1f}x" if speed > 0 else "--"}
-                    )
+                    pbar.set_postfix({"speed": f"{speed:.1f}x" if speed > 0 else "--"})
         finally:
             renderer.end()
             pbar.close()
