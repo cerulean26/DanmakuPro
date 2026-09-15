@@ -55,6 +55,9 @@ pip install .
 ### 2. 运行
 
 ```bash
+# 压制前先体检：检查字体 / Emoji / 礼物覆盖率与视频信息，不产出任何文件
+danmakupro source/视频.mp4 source/弹幕.xml --check
+
 # CLI 模式
 danmakupro source/视频.mp4 source/弹幕.xml
 
@@ -64,6 +67,10 @@ danmakupro source/视频.mp4 source/弹幕.xml --encode gpu -o output.mp4 -f
 # 使用自定义配置文件
 danmakupro source/视频.mp4 source/弹幕.xml -c danmakupro.yaml
 ```
+
+`--check` 会输出视频元数据、弹幕事件统计、字体覆盖率（缺失字符及其 Unicode 码点）、
+Emoji / 礼物图片缺失清单，以及发射能力评估（需求速率 vs 基础能力、是否依赖自适应加速）。
+它是纯检查模式，不产出文件，也不会被上一次失败留下的残缺输出挡住。
 
 ### 3. 退出码与中断
 
@@ -110,6 +117,10 @@ danmakupro source/视频.mp4 source/弹幕.xml -c danmakupro.yaml
 | `emoji_spacing` | 4 | Emoji 间距（像素） |
 | `font_size` | 25 | 字体大小（pt） |
 | `fade_out_zone` | 30.0 | 淡出区域高度（像素） |
+| `bubble_bg_color` | `[20, 20, 20, 127]` | 气泡背景 RGBA（0~255） |
+| `username_color` | `[135, 206, 250]` | 用户名颜色 RGB（0~255） |
+| `text_color` | `[255, 255, 255]` | 正文颜色 RGB（0~255） |
+| `gift_color` | `[255, 255, 150]` | 礼物弹幕文字颜色 RGB（0~255） |
 
 ### 布局比例 (ratio)
 
