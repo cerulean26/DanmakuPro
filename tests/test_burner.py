@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
+import sys
 
 import pytest
 
@@ -9,6 +10,16 @@ from danmakupro.config.models import AnimationParams, DanmakuConfig, DEFAULT_CON
 from danmakupro.core.burner import DanmakuBurner
 from danmakupro.errors import DanmakuProError, ErrorCategory, InputError
 from danmakupro.input.event import DanmakuEvent
+
+
+class _Stdin:
+    """stdin 替身：isatty() 固定返回给定值，用于模拟终端 / 管道两种环境。"""
+
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
 
 
 @pytest.fixture
@@ -146,6 +157,58 @@ class TestBurnerInit:
         )
         assert burner._asset_provider is not None
         assert burner._frame_encoder is not None
+
+    # 以下两条刻意不 mock validate_output_path —— 要验证的正是「输出文件已
+    # 存在」这条真实链路（询问 → 分叉），以及分叉发生在创建任何组件之前。
+
+    def test_rejected_overwrite_aborts_before_building(self, tmp_path, monkeypatch):
+        """拒绝覆盖时构造应中止，且不创建 AssetLoader / FFmpegManager。"""
+        monkeypatch.setattr(sys, "stdin", _Stdin(tty=False))
+        video = tmp_path / "test.mp4"
+        video.touch()
+        xml = tmp_path / "test.xml"
+        xml.touch()
+        out = tmp_path / "out.mp4"
+        out.touch()
+
+        with (
+            patch("danmakupro.core.burner.AssetLoader") as mock_assets,
+            patch("danmakupro.core.burner.FFmpegManager") as mock_encoder,
+        ):
+            with pytest.raises(InputError, match="已取消覆盖"):
+                DanmakuBurner(
+                    str(video),
+                    str(xml),
+                    video_out=str(out),
+                    config=DEFAULT_CONFIG,
+                )
+
+        mock_assets.assert_not_called()
+        mock_encoder.assert_not_called()
+
+    def test_accepted_overwrite_proceeds(self, tmp_path, monkeypatch):
+        """交互式回答 y 时，同名文件不再阻挡构造。"""
+        monkeypatch.setattr(sys, "stdin", _Stdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda *a: "y")
+        video = tmp_path / "test.mp4"
+        video.touch()
+        xml = tmp_path / "test.xml"
+        xml.touch()
+        out = tmp_path / "out.mp4"
+        out.touch()
+
+        with (
+            patch("danmakupro.core.burner.AssetLoader"),
+            patch("danmakupro.core.burner.FFmpegManager"),
+        ):
+            burner = DanmakuBurner(
+                str(video),
+                str(xml),
+                video_out=str(out),
+                config=DEFAULT_CONFIG,
+            )
+
+        assert burner.video_out == out.as_posix()
 
 
 # =============================================================================

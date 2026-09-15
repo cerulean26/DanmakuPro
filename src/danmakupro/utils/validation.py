@@ -5,16 +5,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+import sys
 
 from loguru import logger
 
 from ..errors import InputError
+from ..logger_config import flush_logs
 
 SUPPORTED_VIDEO_EXTS = frozenset(
     {".mp4", ".flv", ".mkv", ".avi", ".mov", ".ts", ".webm"}
 )
 SUPPORTED_OUTPUT_EXTS = frozenset({".mp4", ".flv", ".mkv", ".avi", ".mov"})
+
+#: 覆盖确认函数的签名：传入已存在的输出路径，返回是否覆盖。
+#: 参数化是为了让调用方（尤其是测试）能注入固定答案，不必真的读终端。
+ConfirmOverwrite = Callable[[Path], bool]
 
 
 def validate_video_input(video_in: str) -> None:
@@ -53,15 +61,90 @@ def validate_xml_input(xml_in: str) -> None:
         raise InputError(f"不支持的弹幕格式: {path.suffix}")
 
 
-def validate_output_path(video_out: str, force: bool = False) -> None:
-    """校验输出路径，检测文件覆盖。
+def _human_size(num_bytes: int) -> str:
+    """把字节数格式化成便于阅读的字符串（用于展示待覆盖文件的体积）。"""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def confirm_overwrite(path: Path) -> bool:
+    """在交互式终端询问是否覆盖已存在的输出文件。
+
+    为什么要问：同名文件已存在有两种截然不同的来源 —— 用户自己压好的成片
+    （覆盖即不可逆丢失），或上一次失败/中断留下的残缺文件（本就该丢掉）。
+    程序无法可靠区分，于是把决定权交回用户。
+
+    非交互环境（stdin 不是终端：管道、重定向、CI、被其他程序调用）不做询问。
+    此时 ``input()`` 要么立刻拿到 EOF、要么永久阻塞等待一个不会到来的输入，
+    两者都不是期望行为；这种情况按「不覆盖」处理并提示 ``-f``。
+
+    Args:
+        path: 已存在的输出文件路径
+
+    Returns:
+        True 表示覆盖，False 表示保留原文件
+    """
+    if sys.stdin is None or not sys.stdin.isatty():
+        logger.warning(f"输出文件已存在: {path}")
+        logger.warning("当前不是交互式终端，无法询问是否覆盖；如需覆盖请加 -f")
+        return False
+
+    try:
+        stat = path.stat()
+    except OSError:
+        # 询问的瞬间文件刚好消失（被其他进程删掉）：没有可覆盖的对象，
+        # 直接放行比抛一个含义模糊的 OSError 更合理。
+        return True
+
+    if stat.st_size == 0:
+        detail = "0 字节，疑似上次运行失败留下的残留"
+    else:
+        detail = _human_size(stat.st_size)
+    when = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    logger.warning(f"输出文件已存在: {path}（{detail}，最后修改 {when}）")
+
+    # 日志由 loguru 的后台线程异步写出，此刻上面那条 WARNING 多半还在队列里。
+    # 不排空就显示提示，用户会看到「是否覆盖该文件？[y/N] 」后面粘着迟到的
+    # 警告信息。注意 sys.stderr.flush() 对此无效 —— 它刷不到 loguru 的队列。
+    flush_logs()
+
+    while True:
+        try:
+            answer = input("是否覆盖该文件？[y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            # Ctrl+C 与输入流关闭一律按「不覆盖」处理，由调用方给出统一
+            # 错误信息，避免两种退出方式各写一套提示。
+            print()
+            return False
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("", "n", "no"):
+            return False
+        print("请输入 y 或 n。")
+
+
+def validate_output_path(
+    video_out: str,
+    force: bool = False,
+    confirm: ConfirmOverwrite | None = None,
+) -> None:
+    """校验输出路径，并处理「同名文件已存在」。
+
+    已存在时的分支顺序：``force`` 为真则直接覆盖；否则询问用户。询问被拒绝
+    时抛 :class:`InputError` —— 让调用方以非 0 退出码结束，而不是静默产出
+    「什么都没做、却看起来成功」的结果。
 
     Args:
         video_out: 输出视频路径
-        force: 是否强制覆盖已有文件
+        force: 是否跳过确认直接覆盖
+        confirm: 覆盖确认函数，默认 :func:`confirm_overwrite`
 
     Raises:
-        InputError: 输出目录不存在、格式不支持或文件已存在且未指定 force
+        InputError: 输出目录不存在、格式不支持，或用户拒绝覆盖
     """
     path = Path(video_out)
     out_dir = path.parent
@@ -70,7 +153,19 @@ def validate_output_path(video_out: str, force: bool = False) -> None:
         raise InputError(f"输出目录不存在: {out_dir}")
     if path.suffix.lower() not in SUPPORTED_OUTPUT_EXTS:
         raise InputError(f"不支持的输出格式: {path.suffix}")
-    if path.exists():
-        if not force:
-            raise InputError(f"输出文件已存在: {video_out}")
-        logger.warning(f"输出文件已存在，将被覆盖: {video_out}")
+    if not path.exists():
+        return
+
+    if force:
+        logger.warning(f"输出文件已存在，-f 已指定，直接覆盖: {video_out}")
+        return
+
+    ask = confirm if confirm is not None else confirm_overwrite
+    if ask(path):
+        logger.warning(f"输出文件已存在，将覆盖: {video_out}")
+        return
+
+    raise InputError(
+        f"输出文件已存在，已取消覆盖: {video_out}\n"
+        f"如需覆盖请加 -f，或改用 -o 指定其他输出路径。"
+    )

@@ -92,7 +92,7 @@ def main() -> None:
         "--force",
         action="store_true",
         default=False,
-        help="强制覆盖已存在的输出文件（配合 --init-config 时为覆盖已有配置）",
+        help="输出文件已存在时跳过询问直接覆盖（配合 --init-config 时为覆盖已有配置）",
     )
     parser.add_argument(
         "--check",

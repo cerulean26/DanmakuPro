@@ -52,6 +52,24 @@ def _ensure_utf8_stderr() -> None:
         pass
 
 
+def flush_logs() -> None:
+    """等待 enqueue 队列中的日志全部写出到各 sink。
+
+    为什么需要：两个 sink 都配了 ``enqueue=True``，日志记录由 loguru 的后台
+    线程异步写出，``logger.warning()`` 返回时记录往往还躺在队列里。此时若主
+    线程紧接着往同一终端输出别的东西（``input()`` 的交互提示、tqdm 进度条），
+    滞留的那条日志会晚一步挤出来，和别的内容粘在同一行。
+
+    注意 ``sys.stderr.flush()`` 解决不了这个问题：它刷的是 Python 的文本缓冲，
+    而待写的记录还在 loguru 的队列里，flush 时无内容可刷。实测（2026-09-16，
+    enqueue=True 复刻本配置）5/5 轮出现「提示先显示、WARNING 后挤出」，改用
+    本函数后 5/5 轮顺序正确。
+
+    对未开启 enqueue 的 sink 是空操作，无 sink 时亦可安全调用。
+    """
+    logger.complete()
+
+
 def configure_logger() -> None:
     """配置 loguru 日志。
 
