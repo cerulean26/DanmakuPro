@@ -16,7 +16,9 @@ from danmakupro.render.layout_builder import DanmakuLayoutBuilder
 
 
 def main():
-    app = QGuiApplication.instance() or QGuiApplication(sys.argv)
+    # 保留引用：PySide6 的 QGuiApplication 若在 Python 侧失去引用，
+    # 可能连带销毁 Qt 全局状态。下划线前缀同时让 ruff 的 F841 放行。
+    _app = QGuiApplication.instance() or QGuiApplication(sys.argv)
     cfg = DEFAULT_CONFIG
 
     # 1. 加载资源
@@ -46,7 +48,7 @@ def main():
         style=cfg.style, ratio=cfg.ratio,
         line_height=al.line_height,
     )
-    print(f"\n视频分辨率: 1080x1920")
+    print("\n视频分辨率: 1080x1920")
     print(f"文本弹幕最大宽度: {lp.text_w}px")
     print(f"弹幕区: bottom={lp.bottom}, top={lp.text_top}, height={lp.text_h}")
     print(f"渲染层: {layer.layer_w}x{layer.layer_h}, xy=({layer.layer_x},{layer.layer_y})")
@@ -58,7 +60,7 @@ def main():
     )
     layout = builder.build(event)
 
-    print(f"\n--- 布局结果 ---")
+    print("\n--- 布局结果 ---")
     print(f"折行数: {len(layout.rows)} 行")
     print(f"气泡总宽度: {layout.total_width}px")
     print(f"气泡总高度: {layout.height}px")
@@ -70,7 +72,11 @@ def main():
         print(f"  第{i}行 ({row.width}px): {' | '.join(segs)}")
 
     # 5. 预渲染
-    layout.pre_render(al.font, al.emoji_cache, al.gift_cache, al.bg_color)
+    # bg_color 归 style 管，AssetLoader 并不持有颜色 ——
+    # 原写法 al.bg_color 属性不存在，运行到这一行必抛 AttributeError。
+    layout.pre_render(
+        al.font, al.emoji_cache, al.gift_cache, cfg.style.bubble_bg_color,
+    )
     assert layout.cached_image is not None
     print(f"\n预渲染图片尺寸: {layout.cached_image.width()}x{layout.cached_image.height()}")
 

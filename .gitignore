@@ -18,6 +18,9 @@ logs/
 other/
 assets/
 
+# scripts/ 调试脚本的产物（danmaku_test.png 等）
+output/
+
 # Test coverage
 .coverage
 htmlcov/
