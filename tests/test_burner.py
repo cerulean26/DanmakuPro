@@ -157,7 +157,7 @@ class TestBurnerRun:
         events = [DanmakuEvent(time=0.5, user="u", text="hello")]
         mock_encoder = MagicMock()
         mock_encoder.get_video_info.return_value = {
-            "w": 1920, "h": 1080, "fps": 30, "frames": 300,
+            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 
@@ -198,7 +198,7 @@ class TestBurnerRun:
         events = [DanmakuEvent(time=0.5, user="u", text="hello")]
         mock_encoder = MagicMock()
         mock_encoder.get_video_info.return_value = {
-            "w": 1920, "h": 1080, "fps": 30, "frames": 300,
+            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 

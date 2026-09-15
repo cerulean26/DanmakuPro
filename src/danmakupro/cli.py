@@ -58,7 +58,7 @@ def main() -> None:
         burner = DanmakuBurner(
             video_in=args.video, xml_in=args.xml,
             video_out=args.output, encode_mode=args.encode,
-            config=config, force=args.force,
+            config=config, force=args.force, check_only=args.check,
         )
     except DanmakuProError as e:
         logger.error(f"[{e.category.value}] {e}")

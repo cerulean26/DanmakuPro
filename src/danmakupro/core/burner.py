@@ -41,6 +41,7 @@ class DanmakuBurner:
         encode_mode: str = EncodeMode.AUTO,
         config: DanmakuConfig = DEFAULT_CONFIG,
         force: bool = False,
+        check_only: bool = False,
     ):
         """初始化弹幕压制引擎
         Args:
@@ -50,6 +51,9 @@ class DanmakuBurner:
             encode_mode: 编码模式
             config: 弹幕配置
             force: 是否强制覆盖输出文件
+            check_only: 仅做资源检查，不压制。为 True 时跳过输出路径校验 ——
+                检查模式不产出任何文件，校验「输出文件已存在」没有意义，
+                反而会被上一次失败留下的残缺产物挡在门外。
         """
         validate_video_input(video_in)
         validate_xml_input(xml_in)
@@ -66,7 +70,9 @@ class DanmakuBurner:
 
         self.video_out = Path(self.video_out).as_posix()
 
-        validate_output_path(self.video_out, force)
+        # check_only 下不校验输出路径：见 __init__ 的 check_only 说明。
+        if not check_only:
+            validate_output_path(self.video_out, force)
 
         self._asset_provider = AssetLoader(
             font_size=self._config.style.font_size,
@@ -76,6 +82,70 @@ class DanmakuBurner:
             video_in, self.video_out, encode_mode,
             self._config.encode, self._config.system,
         )
+
+    def _prepare_events_and_video_info(
+        self,
+    ) -> tuple[list[DanmakuEvent], dict, dict]:
+        """准备阶段（Step 1-3）：解析 XML、加载资源、读取视频元数据。
+
+        check() 与 run() 共用，避免两处各写一遍近 60 行、改一处漏一处。
+
+        ffprobe（子进程，约 0.23s）与「解析 XML → 加载资源」（约 0.33s）
+        互不依赖，故把前者丢进后台线程并发执行：串行 0.56s → 并发
+        max(0.33s, 0.23s)，实测省下约 0.23s 纯等待。
+
+        Returns:
+            (events, resource, v_info)。resource 为 AssetLoader.load_assets
+            的返回值，v_info 为 FFmpegManager.get_video_info 的返回值。
+
+        Raises:
+            RuntimeError: 未安装 ffprobe
+        """
+        cfg = self._config
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="prepare",
+        ) as pool:
+            video_info_future = pool.submit(self._frame_encoder.get_video_info)
+
+            events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
+            text_count = sum(1 for e in events if not e.is_gift)
+            t_min = events[0].time if events else 0.0
+            t_max = events[-1].time if events else 0.0
+            logger.info(
+                f"[1] 解析 XML → {len(events)} 事件"
+                f" (文本 {text_count}+礼物 {len(events) - text_count}),"
+                f" {t_min:.1f}~{t_max:.1f}s"
+            )
+
+            resource = self._asset_provider.load_assets(events)
+            emoji_used = len(resource['used_emoji'])
+            emoji_missing = len(resource['missing_emoji'])
+            gift_used = len(resource['used_gift'])
+            gift_missing = len(resource['missing_gift'])
+            logger.info(
+                f"[2] 加载资源 → "
+                f"Emoji {emoji_used - emoji_missing}/{emoji_used}, "
+                f"礼物 {gift_used - gift_missing}/{gift_used}"
+            )
+
+            v_info = video_info_future.result()
+
+        fps: float = float(v_info['fps'])
+        total_frames: int = int(v_info['frames'])
+        logger.info(
+            f"[3] 视频信息 → {int(v_info['w'])}x{int(v_info['h'])}, {fps:.0f}fps, "
+            f"{total_frames} 帧 ({total_frames / fps:.0f}s)"
+        )
+
+        # 用 .get 而非下标：vfr 是后加的字段，老调用方（含测试中的 mock）
+        # 可能只给四个基本键，缺键时按「非 VFR」处理。
+        if v_info.get('vfr'):
+            logger.warning(
+                "变帧率(VFR)素材：标称帧率与实测均值不一致。"
+                "弹幕按等间隔帧推算时间，VFR 源上会逐渐漂移"
+            )
+
+        return events, resource, v_info
 
     def check(self) -> None:
         """资源完整性检查模式 —— 不执行实际压制。
@@ -88,40 +158,18 @@ class DanmakuBurner:
         - 编码器可用性（GPU / QSV / CPU）
         """
         cfg = self._config
+        events, resource, v_info = self._prepare_events_and_video_info()
 
-        # Step 1: 解析 XML（与 run() 共享逻辑）
-        events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
         text_count = sum(1 for e in events if not e.is_gift)
         gift_count = len(events) - text_count
         t_min = events[0].time if events else 0.0
         t_max = events[-1].time if events else 0.0
-        logger.info(
-            f"[1] 解析 XML → {len(events)} 事件"
-            f" (文本 {text_count}+礼物 {gift_count}),"
-            f" {t_min:.1f}~{t_max:.1f}s"
-        )
 
-        # Step 2: 加载资源
-        resource = self._asset_provider.load_assets(events)
-        emoji_ok = len(resource['used_emoji']) - len(resource['missing_emoji'])
-        gift_ok = len(resource['used_gift']) - len(resource['missing_gift'])
-        logger.info(
-            f"[2] 加载资源 → "
-            f"Emoji {emoji_ok}/{len(resource['used_emoji'])}, "
-            f"礼物 {gift_ok}/{len(resource['used_gift'])}"
-        )
-
-        # Step 3: 视频信息
-        v_info = self._frame_encoder.get_video_info()
         raw_w: int = int(v_info['w'])
         raw_h: int = int(v_info['h'])
         fps: float = float(v_info['fps'])
         total_frames: int = int(v_info['frames'])
         duration = total_frames / fps
-        logger.info(
-            f"[3] 视频信息 → {raw_w}x{raw_h}, {fps:.0f}fps, "
-            f"{total_frames} 帧 ({duration:.0f}s)"
-        )
 
         # 编码器可用性（已在 __init__ 中探测）
         _PIPELINE_LABELS: dict[str, str] = {
@@ -228,35 +276,7 @@ class DanmakuBurner:
         style = cfg.style
         syscfg = cfg.system
 
-        # Step 1-3：ffprobe 与「解析 XML → 加载资源」互不依赖，并发执行。
-        # 串行耗时约 parse 0.18s + assets 0.15s + ffprobe 0.23s；
-        # 并发后只需 max(0.33s, 0.23s)，实测省下约 0.23s 的纯等待。
-        with ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="prepare",
-        ) as pool:
-            video_info_future = pool.submit(self._frame_encoder.get_video_info)
-
-            # Step 1
-            events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
-            text_count = sum(1 for e in events if not e.is_gift)
-            t_min = events[0].time if events else 0.0
-            t_max = events[-1].time if events else 0.0
-            logger.info(
-                f"[1] 解析 XML → {len(events)} 事件"
-                f" (文本 {text_count}+礼物 {len(events) - text_count}),"
-                f" {t_min:.1f}~{t_max:.1f}s"
-            )
-
-            # Step 2
-            self._asset_provider.load_assets(events)
-            logger.info(
-                f"[2] 加载资源 → "
-                f"Emoji {len(self._asset_provider.emoji_cache)}, "
-                f"礼物 {len(self._asset_provider.gift_cache)}"
-            )
-
-            # Step 3
-            v_info = video_info_future.result()
+        events, _resource, v_info = self._prepare_events_and_video_info()
 
         raw_w: int = int(v_info['w'])
         raw_h: int = int(v_info['h'])
@@ -266,11 +286,6 @@ class DanmakuBurner:
         align = syscfg.video_alignment
         w = int(((raw_w + align - 1) // align) * align)
         h = int(((raw_h + align - 1) // align) * align)
-
-        logger.info(
-            f"[3] 视频信息 → {raw_w}x{raw_h}, {fps:.0f}fps, "
-            f"{total_frames} 帧 ({total_frames / fps:.0f}s)"
-        )
 
         # Step 4-6: 布局计算、构建器初始化、编码命令（均为瞬时操作）
         layout_params, layer_params = LayoutEngine.calculate_params(
@@ -293,6 +308,7 @@ class DanmakuBurner:
             self._frame_encoder, self._config, self._asset_provider,
         )
 
+        failed = False
         try:
             self._frame_encoder.start(ffmpeg_cmd)
             logger.info("[4] 准备就绪 → 启动 FFmpeg")
@@ -309,10 +325,16 @@ class DanmakuBurner:
                 result.t_start,
             )
         except KeyboardInterrupt:
+            failed = True
             logger.warning("用户中断压制")
+            # 不重新抛出：保持既有行为，中断按正常收尾流程处理。
+            # 已知代价是进程仍以 0 退出，调用方会误判为压制成功 —— 属独立问题，
+            # 不在本次「失败清理」范围内，改动前需先确认预期。
         except DanmakuProError:
+            failed = True
             raise
         except Exception as e:
+            failed = True
             # 用 ErrorHandler.classify 保留原始异常的类别，而不是一律包成
             # RuntimeError（那会让 _classify_error 把一切都归为 RENDER）。
             raise DanmakuProError(
@@ -322,6 +344,27 @@ class DanmakuBurner:
             ) from e
         finally:
             self._frame_encoder.cleanup()
+            if failed or not self._frame_encoder.encode_succeeded:
+                self._discard_incomplete_output()
+
+    def _discard_incomplete_output(self) -> None:
+        """删除未成功完成时留下的残缺输出文件。
+
+        失败或中断后残留的 0 字节（或半截）mp4 会让下次运行卡在
+        「输出文件已存在」，而用户往往不知道那是上一次失败留下的产物。
+        成功路径不会调用本方法。
+
+        删除失败只警告不抛出：清理失败不应掩盖真正的压制错误。
+        """
+        path = Path(self.video_out)
+        if not path.exists():
+            return
+        try:
+            path.unlink()
+        except OSError as e:
+            logger.warning(f"无法删除不完整的输出文件 {path}: {e}")
+            return
+        logger.warning(f"已删除未完成的输出文件: {path}")
 
     @staticmethod
     def _warn_unspawned(

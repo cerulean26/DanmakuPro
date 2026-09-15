@@ -34,6 +34,12 @@ class FFmpegManager:
 
     _SPEED_RE = re.compile(r'speed=\s*([\d.]+)x')
 
+    #: VFR 判定容差（相对偏差）。mp4 容器的时间戳舍入会让 avg_frame_rate 与
+    #: r_frame_rate 差约 0.1%（实测本项目产物 1-弹幕版.mp4：r=20/1、
+    #: avg=17005/851≈19.98），故不能要求严格相等；真正的 VFR 素材差异远大于此
+    #: （实测 source/1.flv：r=20/1、avg=22/1，差 10%）。1% 可同时避开两者。
+    _VFR_TOLERANCE = 0.01
+
     def __init__(
         self,
         video_in: str,
@@ -48,6 +54,8 @@ class FFmpegManager:
         self.encode_params = encode_params
         self.system_params = system_params
         self.active_pipeline: str = EncodeMode.CPU
+        #: FFmpeg 是否以 returncode 0 正常收尾。压制失败时调用方据此清理残缺产物。
+        self.encode_succeeded: bool = False
         self.process: subprocess.Popen | None = None
         self.stderr_thread: threading.Thread | None = None
         self._speed_lock = threading.Lock()
@@ -149,8 +157,39 @@ class FFmpegManager:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
-    def get_video_info(self) -> dict[str, int | float]:
-        """获取视频元数据"""
+    @staticmethod
+    def _parse_frame_rate(raw: str | None) -> float:
+        """把 ffprobe 的 "num/den" 形式转成浮点数。
+
+        Args:
+            raw: 形如 "22/1" 的字符串；缺失或非法时返回 0.0
+
+        Returns:
+            帧率；无法解析时返回 0.0（调用方以 > 0 判断是否有效）
+        """
+        if not raw:
+            return 0.0
+        num, _, den = raw.partition("/")
+        try:
+            numerator = int(num)
+            denominator = int(den) if den else 1
+        except ValueError:
+            return 0.0
+        if denominator == 0:
+            return 0.0
+        return numerator / denominator
+
+    def get_video_info(self) -> dict[str, int | float | bool]:
+        """获取视频元数据。
+
+        Returns:
+            w / h / fps / frames 四个基本字段，外加 vfr 标记：
+            标称帧率（r_frame_rate）与实际均值（avg_frame_rate）相对偏差
+            超过 _VFR_TOLERANCE 时为 True，表示这是变帧率素材。
+
+            渲染循环按 frame_index / fps 等间隔推算弹幕时间，VFR 源上
+            推算值与画面真实时间不吻合，弹幕会逐渐漂移，故需向上报告。
+        """
         if shutil.which("ffprobe") is None:
             raise RuntimeError(
                 "未找到 ffprobe，请先安装 FFmpeg:\n"
@@ -159,7 +198,8 @@ class FFmpegManager:
             )
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,r_frame_rate,nb_frames:format=duration",
+            "-show_entries",
+            "stream=width,height,r_frame_rate,avg_frame_rate,nb_frames:format=duration",
             "-of", "json", self.video_in,
         ]
         result = subprocess.run(
@@ -168,15 +208,32 @@ class FFmpegManager:
         )
         data = json.loads(result.stdout)
         info = data["streams"][0]
-        num, den = map(int, info["r_frame_rate"].split('/'))
-        fps = num / den
-        frames = int(info.get("nb_frames", 0))
+        fps = FFmpegManager._parse_frame_rate(info.get("r_frame_rate"))
+        avg_fps = FFmpegManager._parse_frame_rate(info.get("avg_frame_rate"))
+
+        # nb_frames 在 flv/mp4 上可能缺失或为 "N/A"，不能无条件 int()。
+        raw_frames = info.get("nb_frames")
+        try:
+            frames = int(raw_frames) if raw_frames else 0
+        except (TypeError, ValueError):
+            frames = 0
 
         if frames == 0:
             dur = float(data["format"]["duration"])
             frames = int(dur * fps)
 
-        return {"w": int(info["width"]), "h": int(info["height"]), "fps": fps, "frames": frames}
+        vfr = bool(
+            fps > 0 and avg_fps > 0
+            and abs(fps - avg_fps) / fps > FFmpegManager._VFR_TOLERANCE
+        )
+
+        return {
+            "w": int(info["width"]),
+            "h": int(info["height"]),
+            "fps": fps,
+            "frames": frames,
+            "vfr": vfr,
+        }
 
     def build_command(self, fps: float, w: int, h: int, layer_params: LayerParams) -> list[str]:
         """构建 FFmpeg 命令"""
@@ -379,6 +436,7 @@ class FFmpegManager:
         try:
             return_code = proc.wait(timeout=600.0)
             if return_code == 0:
+                self.encode_succeeded = True
                 logger.success(f"压制完成: {self.video_out}")
             else:
                 logger.error(f"压制失败 (code={return_code})")
