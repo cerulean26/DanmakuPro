@@ -180,10 +180,8 @@ class DanmakuBurner:
             "qsv": "QSV",
             "cpu": "CPU (libx264)",
         }
-        pipeline_label = _PIPELINE_LABELS.get(
-            self._frame_encoder.active_pipeline,
-            self._frame_encoder.active_pipeline,
-        )
+        pipeline = self._frame_encoder.active_pipeline
+        pipeline_label = _PIPELINE_LABELS.get(pipeline, pipeline)
 
         # ── 发射能力评估 ──
         anim = cfg.animation

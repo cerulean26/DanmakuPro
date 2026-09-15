@@ -13,10 +13,11 @@ from danmakupro.layout.params import LayerParams
 
 @pytest.fixture
 def ffmpeg_mgr():
-    with patch.object(FFmpegManager, "_resolve_encode_mode"):
-        mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.CPU)
-        mgr.active_pipeline = EncodeMode.CPU
-        return mgr
+    # 构造不触发探测（见 FFmpegManager.active_pipeline 的惰性说明），
+    # 这里显式指定管线，用例便无需真实 ffmpeg。
+    mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.CPU)
+    mgr.active_pipeline = EncodeMode.CPU
+    return mgr
 
 
 # =============================================================================
@@ -29,6 +30,7 @@ def _bare_mgr(mode):
     mgr.encode_mode = mode
     mgr.encode_params = DEFAULT_CONFIG.encode
     mgr.system_params = DEFAULT_CONFIG.system
+    mgr._active_pipeline = None
     return mgr
 
 
@@ -87,6 +89,68 @@ class TestResolveEncodeMode:
                 mgr = _bare_mgr(EncodeMode.QSV)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.QSV
+
+
+# =============================================================================
+# 惰性探测
+# =============================================================================
+
+class TestLazyProbe:
+    """构造 FFmpegManager 不应付探测代价，首次读取 active_pipeline 才探测。
+
+    探测要起 ffmpeg 子进程（auto 模式缓存未命中时约 1.5s）。若构造即探测，
+    GUI 里建好对象后用户取消、单测只断言构造参数等场景都会白付这份代价。
+    """
+
+    def test_construction_does_not_probe(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch(
+                "danmakupro.encode.ffmpeg._probe_encode_pipeline",
+            ) as mock_probe:
+                FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                assert mock_probe.call_count == 0
+
+    def test_first_access_triggers_probe(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch(
+                "danmakupro.encode.ffmpeg._probe_encode_pipeline",
+                return_value=EncodeMode.GPU,
+            ) as mock_probe:
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                assert mgr.active_pipeline == EncodeMode.GPU
+                assert mock_probe.call_count == 1
+
+    def test_probe_runs_once_across_repeated_reads(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch(
+                "danmakupro.encode.ffmpeg._probe_encode_pipeline",
+                return_value=EncodeMode.CPU,
+            ) as mock_probe:
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                for _ in range(3):
+                    mgr.active_pipeline
+                assert mock_probe.call_count == 1
+
+    def test_missing_ffmpeg_defers_error_to_first_access(self):
+        """没装 ffmpeg 时构造不再立刻报错，改为首次读取时抛出。
+
+        RuntimeError 仍会被 CLI 的 except Exception 兜住并 exit 1，
+        退出码不变；只是报错时机从「创建 burner」推迟到「执行」。
+        """
+        with patch("shutil.which", return_value=None):
+            mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.CPU)
+            with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
+                mgr.active_pipeline
+
+    def test_explicit_assignment_skips_probe(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch(
+                "danmakupro.encode.ffmpeg._probe_encode_pipeline",
+            ) as mock_probe:
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                mgr.active_pipeline = EncodeMode.QSV
+                assert mgr.active_pipeline == EncodeMode.QSV
+                assert mock_probe.call_count == 0
 
 
 # =============================================================================

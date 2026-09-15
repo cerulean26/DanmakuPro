@@ -65,7 +65,6 @@ class FFmpegManager:
         self.encode_mode = encode_mode
         self.encode_params = encode_params
         self.system_params = system_params
-        self.active_pipeline: str = EncodeMode.CPU
         #: FFmpeg 是否以 returncode 0 正常收尾。压制失败时调用方据此清理残缺产物。
         self.encode_succeeded: bool = False
         #: 本次压制是否被用户中断（Ctrl+C）。中断时 FFmpeg 收到 stdin EOF 后仍会
@@ -75,8 +74,11 @@ class FFmpegManager:
         self.stderr_thread: threading.Thread | None = None
         self._speed_lock = threading.Lock()
         self._current_speed: float = 0.0
-
-        self._resolve_encode_mode()
+        #: 编码管线（gpu / qsv / cpu）。**惰性解析** —— 构造时不起子进程探测
+        #: （auto 模式首次约 1.5s），首次读取 active_pipeline 时才探测。
+        #: 这样「只构造不使用」的场景（GUI 建好对象后用户取消、单测只断言
+        #: 构造参数）不必白付探测代价。取值请走 active_pipeline 属性。
+        self._active_pipeline: str | None = None
 
     @property
     def current_speed(self) -> float:
@@ -88,11 +90,38 @@ class FFmpegManager:
         with self._speed_lock:
             return self._current_speed
 
-    def _resolve_encode_mode(self) -> None:
-        """解析编码模式。
+    @property
+    def active_pipeline(self) -> str:
+        """当前生效的编码管线（gpu / qsv / cpu）。
+
+        首次访问时才解析：探测要起 ffmpeg 子进程（缓存未命中时约 1.5s），
+        构造对象本身不该承担这份代价。解析一次后缓存在实例上。
+        """
+        if self._active_pipeline is None:
+            return self._resolve_encode_mode()
+        return self._active_pipeline
+
+    @active_pipeline.setter
+    def active_pipeline(self, value: str) -> None:
+        """显式指定编码管线，跳过探测。
+
+        供测试替身与「已知目标环境」的部署使用。正常流程不应调用，
+        否则会绕过 NVENC / QSV 的可用性检查。
+        """
+        self._active_pipeline = value
+
+    def _resolve_encode_mode(self) -> str:
+        """解析编码模式并记录到 _active_pipeline。
 
         探测结果按 (编码模式, ffmpeg 路径, 超时) 做进程级缓存，重复构造
         FFmpegManager（例如 GUI 中反复点击「开始压制」）不会重跑子进程。
+        本方法由 active_pipeline 的 getter 在首次访问时调用，也可显式调用。
+
+        Returns:
+            解析出的管线（EncodeMode.GPU / EncodeMode.QSV / EncodeMode.CPU）。
+
+        Raises:
+            RuntimeError: 未找到 ffmpeg，或指定模式对应的编码器不可用。
         """
         ffmpeg_exe = shutil.which("ffmpeg")
         if ffmpeg_exe is None:
@@ -104,12 +133,13 @@ class FFmpegManager:
 
         timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
         resolved = _probe_encode_pipeline(str(self.encode_mode), ffmpeg_exe, timeout)
-        self.active_pipeline = resolved
+        self._active_pipeline = resolved
 
         label = _PIPELINE_LABELS[resolved]
         if self.encode_mode == EncodeMode.AUTO:
             label += " — 自动检测" if resolved == EncodeMode.GPU else " — 自动回退"
         logger.info(f"编码模式: {label}")
+        return resolved
 
     @staticmethod
     def clear_probe_cache() -> None:
