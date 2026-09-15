@@ -50,9 +50,12 @@ jobs:
       # 后重跑，结果仍为 279 passed、1424/167 = 88.27%，与正常环境逐位一致。
       # 故 CI（无 NVIDIA GPU）的覆盖率应等于本地，阈值 85 无需按 CI 数字复核。
       #
-      # -m "not gpu and not slow"：为将来的真机端到端用例预留。
-      # 这类用例会真实调用 ffmpeg、部分需要 GPU，必须显式标记后由 CI 排除，
-      # 否则在没有对应硬件的 runner 上必然失败。
-      # 当前无用例使用这两个 marker（已在 pyproject 注册），此过滤为空操作。
+      # -m "not gpu and not slow"：排除真机端到端用例。
+      # tests/test_e2e_burn.py 会真实调用 ffmpeg/ffprobe 压制一段合成视频，
+      # 而本 job **不安装 ffmpeg**（见上一条说明），故必须排除。
+      # 这批用例的定位是「发布前/改动静音链路后」在本机跑的补强验证：
+      #     pytest tests/test_e2e_burn.py -m slow
+      # 若将来希望 CI 也覆盖它们，需先在本 job 里装 ffmpeg（gpu marker 用例
+      # 仍须排除 —— runner 没有 NVIDIA GPU）。
       - name: Run pytest
         run: uv run pytest tests/ -m "not gpu and not slow"

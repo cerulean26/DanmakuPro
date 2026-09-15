@@ -213,6 +213,7 @@ DanmakuPro/
 │       ├── helpers.py        # 通用工具函数
 │       └── validation.py     # 输入输出校验
 ├── tests/                    # 测试
+│   └── test_e2e_burn.py      # 真机端到端用例（标记 slow，默认被 CI 排除）
 ├── assets/                   # Emoji / 礼物 PNG / 特效资源（本地，未纳入版本控制）
 │   ├── emoji/
 │   ├── gift/
@@ -222,6 +223,37 @@ DanmakuPro/
 ├── pyproject.toml
 └── README.md
 ```
+
+## 开发
+
+### 质量门禁
+
+与 CI 完全一致的三条命令（`ci.yml` 的扫描范围就是 `src/` 与 `tests/`）：
+
+```bash
+uv run ruff check src/ tests/
+uv run pyright src/
+uv run pytest tests/ -m "not gpu and not slow"
+```
+
+覆盖率阈值由 `pyproject.toml` 的 `[tool.coverage.report] fail_under` 提供，
+不要在命令行再传 `--cov-fail-under`。测试用例默认需要 `assets/` 之外无任何素材。
+
+### 真机端到端用例（`slow`）
+
+`tests/test_e2e_burn.py` 会**真实调用 ffmpeg / ffprobe**，把一段用 lavfi 合成的
+2 秒视频压制一遍，再反查产物的分辨率、帧数、时长与**像素内容**（弹幕有没有
+真的画上去、有没有在尾部冻住）。它覆盖单测覆盖不到的一类问题：滤镜图写错、
+帧率口径算错、弹幕层根本没叠加。
+
+这批用例被标记为 `slow`，而 CI 不安装 ffmpeg，所以在 CI 中被排除。
+**改动静音链路（`encode/`、`core/`、`render/`）后请在本机跑一遍：**
+
+```bash
+pytest tests/test_e2e_burn.py -m slow
+```
+
+未安装 ffmpeg / ffprobe 的环境会自动跳过，不会造成假失败。
 
 ## 许可证
 
