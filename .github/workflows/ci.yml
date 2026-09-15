@@ -42,7 +42,17 @@ jobs:
       # 覆盖率的统计范围（--cov=src）与及格线（fail_under = 85）均由
       # pyproject.toml 的 [tool.coverage.report] 提供，此处不再重复传参，
       # 避免命令行与配置两处阈值不一致。
-      # 注意：windows-latest runner 无 NVIDIA GPU，编码器探测会走非 NVENC
-      # 分支，CI 实测覆盖率可能与本地有出入，需按 CI 数字复核阈值。
+      #
+      # 环境依赖说明（2026-09-15 实证，非推测）：
+      # 测试套件不依赖真实 ffmpeg / ffprobe / GPU。所有外部调用均以
+      # patch("subprocess.run") / patch("shutil.which") 隔离，探测函数体照常执行、
+      # 但子进程是假的。把 PATH 剥到只剩系统目录（which 不到 ffmpeg/ffprobe）
+      # 后重跑，结果仍为 279 passed、1424/167 = 88.27%，与正常环境逐位一致。
+      # 故 CI（无 NVIDIA GPU）的覆盖率应等于本地，阈值 85 无需按 CI 数字复核。
+      #
+      # -m "not gpu and not slow"：为将来的真机端到端用例预留。
+      # 这类用例会真实调用 ffmpeg、部分需要 GPU，必须显式标记后由 CI 排除，
+      # 否则在没有对应硬件的 runner 上必然失败。
+      # 当前无用例使用这两个 marker（已在 pyproject 注册），此过滤为空操作。
       - name: Run pytest
-        run: uv run pytest tests/
+        run: uv run pytest tests/ -m "not gpu and not slow"
