@@ -29,7 +29,7 @@ def load_image_assets(
     line_height: int,
     cache: dict[str, QImage],
     asset_type: str,
-) -> None:
+) -> set[str]:
     """加载图片资源到缓存字典（独立函数，供测试等场景使用）。
 
     Args:
@@ -38,11 +38,14 @@ def load_image_assets(
         line_height: 目标行高，图片将等比缩放至此高度
         cache: 目标缓存字典，key 为名称，value 为缩放后的 QImage
         asset_type: 资源类型描述（用于日志）
+
+    Returns:
+        未能加载的资源名称集合（缺失或损坏）
     """
     missing: set[str] = set()
     if not asset_dir.exists():
         logger.warning(f"{asset_type} 文件夹不存在")
-        return
+        return set(asset_names)
 
     for name in asset_names:
         file_path = asset_dir / f"{name}.png"
@@ -58,6 +61,7 @@ def load_image_assets(
 
     if missing:
         logger.warning(f"{asset_type} 缺失图片: {sorted(missing)}")
+    return missing
 
 
 class AssetLoader:
@@ -96,8 +100,12 @@ class AssetLoader:
         self.fm = QFontMetrics(self.font)
         self.line_height = self.fm.height()
 
-    def load_assets(self, events: list[DanmakuEvent]) -> None:
-        """按需加载资源"""
+    def load_assets(self, events: list[DanmakuEvent]) -> dict:
+        """按需加载资源
+
+        Returns:
+            {'missing_chars': set[str], 'missing_emoji': set[str], 'missing_gift': set[str]}
+        """
         used_emoji: set[str] = set()
         used_gift: set[str] = set()
         all_chars: set[str] = set()
@@ -111,9 +119,17 @@ class AssetLoader:
                 for name in extract_emoji_names(ev.text):
                     used_emoji.add(name)
 
-        self._load_fonts_for_chars(all_chars)
-        self._load_image_assets(self.emoji_dir, used_emoji, self.emoji_cache, "Emoji")
-        self._load_image_assets(self.gift_dir, used_gift, self.gift_cache, "礼物")
+        missing_chars = self._load_fonts_for_chars(all_chars)
+        missing_emoji = self._load_image_assets(self.emoji_dir, used_emoji, self.emoji_cache, "Emoji")
+        missing_gift = self._load_image_assets(self.gift_dir, used_gift, self.gift_cache, "礼物")
+        return {
+            'missing_chars': missing_chars,
+            'missing_emoji': missing_emoji,
+            'missing_gift': missing_gift,
+            'total_chars': len(all_chars),
+            'used_emoji': used_emoji,
+            'used_gift': used_gift,
+        }
 
     def _load_image_assets(
         self,
@@ -121,16 +137,20 @@ class AssetLoader:
         asset_names: set[str],
         cache: dict[str, QImage],
         asset_type: str,
-    ) -> None:
+    ) -> set[str]:
         """加载图片资源，委托给模块级函数。"""
-        load_image_assets(asset_dir, asset_names, self.line_height, cache, asset_type)
+        return load_image_assets(asset_dir, asset_names, self.line_height, cache, asset_type)
 
-    def _load_fonts_for_chars(self, chars: set[str]) -> None:
-        """按需从系统字体库加载覆盖缺失字符的字体"""
+    def _load_fonts_for_chars(self, chars: set[str]) -> set[str]:
+        """按需从系统字体库加载覆盖缺失字符的字体
+
+        Returns:
+            仍然缺失的字符集合（任何已安装字体都无法覆盖）
+        """
         raw_fonts = self._build_raw_fonts()
         missing = self._find_missing_chars(chars, raw_fonts)
         if not missing:
-            return
+            return missing
 
         newly_loaded = 0
         db = QFontDatabase()
@@ -149,9 +169,13 @@ class AssetLoader:
             self._rebuild_font()
 
         if missing:
-            logger.warning(
-                f"以下字符无字体覆盖，将显示为占位符: {''.join(sorted(missing))}"
+            detail = ', '.join(
+                f"{c!r} (U+{ord(c):04X})" for c in sorted(missing)
             )
+            logger.warning(
+                f"以下 {len(missing)} 个字符无字体覆盖，将显示为占位符: {detail}"
+            )
+        return missing
 
     def _build_raw_fonts(self) -> list[QRawFont]:
         """构建已加载字体的 QRawFont 列表"""
@@ -165,11 +189,16 @@ class AssetLoader:
         f = QFont(family, self._font_size, QFont.Weight.Bold)
         return QRawFont.fromFont(f)
 
+    # Unicode Tags 区块 (U+E0000–U+E007F)：协议隐形标记，设计上永不可见
+    _TAGS_BLOCK = range(0xE0000, 0xE0080)
+
     def _find_missing_chars(self, chars: set[str], raw_fonts: list[QRawFont]) -> set[str]:
         """查找缺失字符"""
         missing: set[str] = set()
         for c in chars:
             if c == ' ':
+                continue
+            if ord(c) in self._TAGS_BLOCK:
                 continue
             for rf in raw_fonts:
                 if self._raw_font_has_char(rf, c):
