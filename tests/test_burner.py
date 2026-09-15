@@ -217,5 +217,11 @@ class TestBurnerRun:
                 config=DEFAULT_CONFIG, force=True,
             )
             burner._frame_encoder = mock_encoder
-            burner.run()
+            # 中断必须继续上抛：吞掉它会让进程以 0 退出，调用方无法区分
+            # 「用户取消」与「压制成功」。
+            with pytest.raises(KeyboardInterrupt):
+                burner.run()
+            # 上抛前仍要完成收尾
             mock_encoder.cleanup.assert_called_once()
+            # 中断同失败：不允许留下残缺产物挡住下次运行
+            assert not out.exists()

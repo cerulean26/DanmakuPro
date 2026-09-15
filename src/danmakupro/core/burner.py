@@ -268,12 +268,15 @@ class DanmakuBurner:
         3. 获取视频元数据
         4. 启动 FFmpeg 编码器 + 压制渲染
 
-        KeyboardInterrupt 会被捕获并输出警告，其他异常按策略处理。
-        无论成功或失败，finally 块都会执行资源清理。
-
         Raises:
             DanmakuProError: 弹幕压制相关的已知错误
             RuntimeError: 不可恢复的致命错误
+            KeyboardInterrupt: 用户中断（记录警告后原样上抛，
+                中断必须继续向上传播，否则调用方会误判为压制成功）
+
+        Note:
+            无论成功、失败还是中断，finally 块都会执行资源清理；
+            中断与失败一样会删除不完整的输出文件。
         """
         cfg = self._config
         style = cfg.style
@@ -329,10 +332,13 @@ class DanmakuBurner:
             )
         except KeyboardInterrupt:
             failed = True
+            # 标记中断，让 cleanup 不要把 FFmpeg 的正常退出报成「压制完成」。
+            self._frame_encoder.interrupted = True
             logger.warning("用户中断压制")
-            # 不重新抛出：保持既有行为，中断按正常收尾流程处理。
-            # 已知代价是进程仍以 0 退出，调用方会误判为压制成功 —— 属独立问题，
-            # 不在本次「失败清理」范围内，改动前需先确认预期。
+            # 必须继续抛出。吞掉中断会让进程以 0 退出，脚本/编排方无法把
+            # 「用户按了 Ctrl+C」和「压制成功」区分开，残缺产物也会被当成成品。
+            # 资源清理由 finally 负责，抛出不影响收尾。
+            raise
         except DanmakuProError:
             failed = True
             raise

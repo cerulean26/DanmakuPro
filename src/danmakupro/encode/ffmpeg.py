@@ -68,6 +68,9 @@ class FFmpegManager:
         self.active_pipeline: str = EncodeMode.CPU
         #: FFmpeg 是否以 returncode 0 正常收尾。压制失败时调用方据此清理残缺产物。
         self.encode_succeeded: bool = False
+        #: 本次压制是否被用户中断（Ctrl+C）。中断时 FFmpeg 收到 stdin EOF 后仍会
+        #: 以 0 退出，只看 returncode 会误报「压制完成」，故需单独标记。
+        self.interrupted: bool = False
         self.process: subprocess.Popen | None = None
         self.stderr_thread: threading.Thread | None = None
         self._speed_lock = threading.Lock()
@@ -553,7 +556,11 @@ class FFmpegManager:
         # 第三步：等待 FFmpeg 进程退出
         try:
             return_code = proc.wait(timeout=600.0)
-            if return_code == 0:
+            if return_code == 0 and self.interrupted:
+                # 中断时 FFmpeg 只是把已写入的帧收了个尾，输出是残缺的。
+                # 这里不能记成功，否则日志会和「已取消」自相矛盾。
+                logger.warning("编码已随中断结束，输出不完整")
+            elif return_code == 0:
                 self.encode_succeeded = True
                 logger.success(f"压制完成: {self.video_out}")
             else:

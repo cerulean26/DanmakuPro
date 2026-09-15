@@ -149,6 +149,27 @@ class TestCLIMain:
             with pytest.raises(SystemExit):
                 main()
 
+    def test_interrupt_exit_code(self, tmp_path):
+        """Ctrl+C 必须以明确的非 0 码退出，不能是 0（会被误判为成功）。"""
+        video = tmp_path / "test.mp4"
+        video.touch()
+        xml = tmp_path / "test.xml"
+        xml.touch()
+
+        with patch("sys.argv", ["danmakupro", str(video), str(xml)]), \
+             patch("danmakupro.cli.load_config"), \
+             patch("danmakupro.cli.configure_logger"), \
+             patch("danmakupro.cli.ensure_qt_app"), \
+             patch("danmakupro.cli.DanmakuBurner") as mock_burner_cls, \
+             patch("danmakupro.cli.QApplication"):
+
+            mock_burner = MagicMock()
+            mock_burner.run.side_effect = KeyboardInterrupt
+            mock_burner_cls.return_value = mock_burner
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 130
+
     def test_run_error_handling(self, tmp_path):
         video = tmp_path / "test.mp4"
         video.touch()

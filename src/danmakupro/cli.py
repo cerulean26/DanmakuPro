@@ -19,6 +19,11 @@ from .errors import DanmakuProError, handle_error
 from .logger_config import configure_logger
 from .utils.helpers import ensure_qt_app
 
+#: 用户中断（Ctrl+C）的退出码：128 + SIGINT(2)，沿用 POSIX 约定。
+#: 不让它向上抛到解释器 —— 那样 Windows 上会得到 STATUS_CONTROL_C_EXIT
+#: (0xC000013A / 3221225786)，POSIX 上又是另一个数，调用方难以判断。
+EXIT_INTERRUPTED = 130
+
 
 def main() -> None:
     """主入口函数"""
@@ -63,6 +68,9 @@ def main() -> None:
     except DanmakuProError as e:
         logger.error(f"[{e.category.value}] {e}")
         raise SystemExit(1)
+    except KeyboardInterrupt:
+        logger.warning("已取消")
+        raise SystemExit(EXIT_INTERRUPTED)
     except Exception as e:
         handle_error(e, component="cli", operation="create_burner")
         raise SystemExit(1)
@@ -72,6 +80,11 @@ def main() -> None:
             burner.check()
         else:
             burner.run()
+    except KeyboardInterrupt:
+        # KeyboardInterrupt 继承自 BaseException，上面的 except Exception
+        # 抓不到，必须单独处理，否则会以平台相关的状态码退出。
+        logger.warning("已取消")
+        raise SystemExit(EXIT_INTERRUPTED)
     except DanmakuProError as e:
         action = "资源检查" if args.check else "压制"
         logger.error(f"{action}失败 [{e.category.value}]: {e}")

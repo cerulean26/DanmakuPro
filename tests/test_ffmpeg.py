@@ -460,6 +460,23 @@ class TestProcessLifecycle:
         ffmpeg_mgr.process = None
         ffmpeg_mgr.cleanup()
 
+    def test_cleanup_interrupted_not_marked_success(self, ffmpeg_mgr):
+        """中断时 FFmpeg 也可能以 0 退出，不能记成压制成功。
+
+        否则日志会同时出现「压制完成」与「已取消」，残缺产物也会被当成成品。
+        """
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stderr = MagicMock()
+        mock_proc.wait.return_value = 0
+        ffmpeg_mgr.process = mock_proc
+        ffmpeg_mgr.stderr_thread = MagicMock()
+        ffmpeg_mgr.stderr_thread.is_alive.return_value = False
+        ffmpeg_mgr.interrupted = True
+
+        ffmpeg_mgr.cleanup()
+        assert ffmpeg_mgr.encode_succeeded is False
+
     def test_health_check_process_dead(self, ffmpeg_mgr):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 1
