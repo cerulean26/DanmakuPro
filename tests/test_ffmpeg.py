@@ -255,6 +255,130 @@ class TestGetVideoInfo:
 
 
 # =============================================================================
+# 帧率口径与 VFR 判定
+# =============================================================================
+
+def _probe_json(rate: str, frames: int | None, duration: str) -> str:
+    """构造 ffprobe 主探测的输出。"""
+    nb = "null" if frames is None else str(frames)
+    return (
+        '{"streams":[{"width":1920,"height":1080,'
+        f'"r_frame_rate":"{rate}","nb_frames":{nb}}}],'
+        f'"format":{{"duration":"{duration}"}}}}'
+    )
+
+
+def _sample_json(count: int, interval: float) -> str:
+    """构造一段采样的 pts_time 列表，count 帧、间隔 interval 秒。"""
+    pts = ",".join(f'{{"pts_time":"{i * interval:.4f}"}}' for i in range(count))
+    return '{"frames":[' + pts + ']}'
+
+
+class TestResolveRenderFps:
+    """渲染帧率必须满足 frames / fps == duration，否则弹幕时间轴对不上画面。"""
+
+    def test_uses_real_average_when_nominal_differs(self):
+        # 标称 30fps、实际 2000 帧/100s = 20fps。按标称渲染，时间轴只有 66.7s，
+        # 后 1/3 的弹幕会全部丢失。
+        assert FFmpegManager._resolve_render_fps(30.0, 2000, 100.0) == 20.0
+
+    def test_keeps_nominal_for_cfr_source(self):
+        assert FFmpegManager._resolve_render_fps(29.97, 300, 10.01) == pytest.approx(
+            29.97, rel=1e-3
+        )
+
+    def test_falls_back_when_duration_unknown(self):
+        assert FFmpegManager._resolve_render_fps(30.0, 2000, 0.0) == 30.0
+
+    def test_falls_back_when_frames_unknown(self):
+        assert FFmpegManager._resolve_render_fps(30.0, 0, 100.0) == 30.0
+
+    def test_falls_back_when_ratio_implausible(self):
+        # 300 帧 / 1s = 300fps，与标称差 10 倍，说明 duration 不可信
+        assert FFmpegManager._resolve_render_fps(30.0, 300, 1.0) == 30.0
+
+    def test_falls_back_when_nominal_invalid(self):
+        assert FFmpegManager._resolve_render_fps(0.0, 2000, 100.0) == 0.0
+
+
+class TestDetectVfr:
+
+    def test_constant_rate_is_not_vfr(self):
+        assert FFmpegManager._detect_vfr([20.0, 20.0, 20.0]) is False
+
+    def test_fluctuating_rate_is_vfr(self):
+        assert FFmpegManager._detect_vfr([20.0, 24.0, 20.0]) is True
+
+    def test_insufficient_samples_is_not_vfr(self):
+        assert FFmpegManager._detect_vfr([20.0]) is False
+        assert FFmpegManager._detect_vfr([]) is False
+
+    def test_zero_rate_is_not_vfr(self):
+        assert FFmpegManager._detect_vfr([0.0, 0.0]) is False
+
+
+class TestSampleLocalFrameRates:
+
+    def test_samples_three_segments(self, ffmpeg_mgr):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_sample_json(100, 0.05))
+            rates = ffmpeg_mgr._sample_local_frame_rates(100.0)
+        assert len(rates) == 3
+        assert all(r == pytest.approx(20.0, rel=1e-2) for r in rates)
+
+    def test_skips_short_video(self, ffmpeg_mgr):
+        with patch("subprocess.run") as mock_run:
+            assert ffmpeg_mgr._sample_local_frame_rates(10.0) == []
+            mock_run.assert_not_called()
+
+    def test_returns_empty_on_probe_error(self, ffmpeg_mgr):
+        with patch("subprocess.run", side_effect=OSError):
+            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
+
+    def test_returns_empty_when_too_few_frames(self, ffmpeg_mgr):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_sample_json(1, 0.05))
+            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
+
+    def test_returns_empty_on_malformed_json(self, ffmpeg_mgr):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="not json")
+            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
+
+
+class TestGetVideoInfoFrameRate:
+    """get_video_info 返回的 fps 要让弹幕时间轴等于视频真实时长。"""
+
+    def test_vfr_source_gets_real_average_fps(self, ffmpeg_mgr):
+        side = [
+            MagicMock(stdout=_probe_json("30/1", 2000, "100.0")),
+            MagicMock(stdout=_sample_json(100, 0.05)),   # 20fps
+            MagicMock(stdout=_sample_json(100, 0.04)),   # 25fps
+            MagicMock(stdout=_sample_json(100, 0.05)),   # 20fps
+        ]
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", side_effect=side):
+                info = ffmpeg_mgr.get_video_info()
+        assert info["frames"] == 2000
+        assert info["fps"] == 20.0
+        assert info["frames"] / info["fps"] == 100.0
+        assert info["vfr"] is True
+
+    def test_cfr_source_keeps_nominal_fps(self, ffmpeg_mgr):
+        side = [
+            MagicMock(stdout=_probe_json("30/1", 3000, "100.0")),
+            MagicMock(stdout=_sample_json(150, 0.0333)),
+            MagicMock(stdout=_sample_json(150, 0.0333)),
+            MagicMock(stdout=_sample_json(150, 0.0333)),
+        ]
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", side_effect=side):
+                info = ffmpeg_mgr.get_video_info()
+        assert info["fps"] == 30.0
+        assert info["vfr"] is False
+
+
+# =============================================================================
 # build_command
 # =============================================================================
 
