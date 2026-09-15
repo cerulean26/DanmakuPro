@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtGui import QGuiApplication, QFont, QFontMetrics, QImage, QColor
 
 from danmakupro.config import DEFAULT_CONFIG
+from danmakupro.encode.ffmpeg import FFmpegManager
 
 style = DEFAULT_CONFIG.style
 
@@ -51,6 +52,23 @@ def asset_loader(font, font_metrics, emoji_cache, gift_cache):
         emoji_cache=emoji_cache,
         gift_cache=gift_cache,
     )
+
+
+# =============================================================================
+# 编码器探测缓存隔离
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _clear_encode_probe_cache():
+    """每个用例前后清空编码器探测缓存。
+
+    探测结果按 (编码模式, ffmpeg 路径, 超时) 缓存在进程级 lru_cache 中，
+    若不清理，前一个用例探测出的管线会泄漏到下一个用例。
+    """
+    FFmpegManager.clear_probe_cache()
+    yield
+    FFmpegManager.clear_probe_cache()
 
 
 # =============================================================================

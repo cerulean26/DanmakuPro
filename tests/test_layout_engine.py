@@ -655,6 +655,116 @@ class TestSpawnNewDanmakus:
         assert text_new2 is False
 
 
+class TestEffectiveSpawnInterval:
+    """测试 effective_spawn_interval：有界延迟自适应控制律。"""
+
+    def test_no_backlog_returns_base_interval(self):
+        """积压不超过一个批次时不收紧。"""
+        assert LayoutEngine.effective_spawn_interval(3, 3, 0.5, 2.0) == 0.5
+
+    def test_small_backlog_within_latency_returns_base(self):
+        """所需速率低于基础速率时，保持基础间隔。"""
+        # pending=10, L=2.0 -> 需要 5/s，低于基础 6/s
+        assert LayoutEngine.effective_spawn_interval(10, 3, 0.5, 2.0) == 0.5
+
+    def test_large_backlog_tightens_interval(self):
+        """所需速率高于基础速率时，间隔按 pending / max_latency 收紧。"""
+        # pending=30, L=2.0 -> 需要 15/s -> 间隔 = 3/15 = 0.2
+        assert LayoutEngine.effective_spawn_interval(30, 3, 0.5, 2.0) == pytest.approx(0.2)
+
+    def test_interval_shrinks_monotonically_with_backlog(self):
+        """积压越大，间隔越短（单调性）。"""
+        intervals = [
+            LayoutEngine.effective_spawn_interval(p, 3, 0.5, 2.0)
+            for p in (3, 12, 24, 48, 96)
+        ]
+        assert intervals == sorted(intervals, reverse=True)
+        assert intervals[-1] < intervals[0]
+
+    def test_drain_rate_matches_pending_over_latency(self):
+        """收紧后的排空速率应满足 pending / max_latency。"""
+        pending, batch, interval, lat = 60, 3, 0.5, 2.0
+        eff = LayoutEngine.effective_spawn_interval(pending, batch, interval, lat)
+        assert batch / eff == pytest.approx(pending / lat)
+
+    def test_none_latency_disables_adaptive(self):
+        """max_spawn_latency=None 时退化为固定间隔（原行为）。"""
+        assert LayoutEngine.effective_spawn_interval(100, 3, 0.5, None) == 0.5
+
+    def test_zero_interval_disables_adaptive(self):
+        """间隔为 0（立即发射）时不参与自适应，避免除零。"""
+        assert LayoutEngine.effective_spawn_interval(100, 3, 0.0, 2.0) == 0.0
+
+
+class TestAdaptiveSpawnIntegration:
+    """自适应与固定间隔的行为对比（集成层）。"""
+
+    def _events(self, count: int):
+        return [_make_event(f"弹幕{i}", time=1.0) for i in range(count)]
+
+    def test_adaptive_emits_sooner_under_backlog(
+        self, font_metrics, emoji_cache, gift_cache, asset_loader,
+    ):
+        """积压很大时，自适应模式在基础间隔到达前即可继续发射。"""
+        from danmakupro.config.models import AnimationParams
+
+        batch_size = DEFAULT_CONFIG.animation.text_spawn_batch_size
+        events = self._events(batch_size + 30)
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
+
+        ctx = LayoutContext(
+            text_event_idx=0, gift_event_idx=0,
+            last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0,
+            animation=AnimationParams(max_spawn_latency=2.0),
+        )
+        LayoutEngine.spawn_new_danmakus(
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
+        )
+        assert len(active_text) == batch_size
+
+        # 0.1s 后：基础间隔 0.5s 未到，但积压 30 条使间隔收紧到 0.2s —— 仍不发射
+        text_new_early, _, _, _ = LayoutEngine.spawn_new_danmakus(
+            ctx, 1.1, events, active_text, active_gift, builder, asset_loader,
+        )
+        assert text_new_early is False
+
+        # 0.25s 后：超过收紧后的 0.2s，应继续发射
+        text_new_late, _, text_emitted, _ = LayoutEngine.spawn_new_danmakus(
+            ctx, 1.25, events, active_text, active_gift, builder, asset_loader,
+        )
+        assert text_new_late is True
+        assert text_emitted > 0
+
+    def test_fixed_interval_blocks_at_same_moment(
+        self, font_metrics, emoji_cache, gift_cache, asset_loader,
+    ):
+        """同样时刻，禁用自适应的固定间隔仍然阻塞（对照）。"""
+        from danmakupro.config.models import AnimationParams
+
+        batch_size = DEFAULT_CONFIG.animation.text_spawn_batch_size
+        events = self._events(batch_size + 30)
+        builder = _make_builder(font_metrics, emoji_cache, gift_cache)
+        active_text: list[ActiveDanmakuView] = []
+        active_gift: list[ActiveDanmakuView] = []
+
+        ctx = LayoutContext(
+            text_event_idx=0, gift_event_idx=0,
+            last_text_spawn_time=-1.0, last_gift_spawn_time=-1.0,
+            animation=AnimationParams(max_spawn_latency=None),
+        )
+        LayoutEngine.spawn_new_danmakus(
+            ctx, 1.0, events, active_text, active_gift, builder, asset_loader,
+        )
+        assert len(active_text) == batch_size
+
+        text_new, _, _, _ = LayoutEngine.spawn_new_danmakus(
+            ctx, 1.25, events, active_text, active_gift, builder, asset_loader,
+        )
+        assert text_new is False
+
+
 class TestSpawnNewDanmakusGift:
     """测试 spawn_new_danmakus：礼物弹幕的生成逻辑（惰性创建模式）。"""
 

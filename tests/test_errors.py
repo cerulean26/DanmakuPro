@@ -102,12 +102,19 @@ class TestErrorHandler:
         assert ErrorHandler._classify_error(BrokenPipeError()) == ErrorCategory.ENCODE
         assert ErrorHandler._classify_error(OSError()) == ErrorCategory.ENCODE
         assert ErrorHandler._classify_error(MemoryError()) == ErrorCategory.SYSTEM
-        assert ErrorHandler._classify_error(PermissionError()) == ErrorCategory.ENCODE
+        # PermissionError 是 OSError 的子类，必须判为 SYSTEM（权限/环境问题），
+        # 而不是被父类分支抢先归入 ENCODE
+        assert ErrorHandler._classify_error(PermissionError()) == ErrorCategory.SYSTEM
         assert ErrorHandler._classify_error(RuntimeError()) == ErrorCategory.RENDER
         assert ErrorHandler._classify_error(KeyError()) == ErrorCategory.UNKNOWN
 
     def test_classify_subclass(self):
         assert ErrorHandler._classify_error(IsADirectoryError()) == ErrorCategory.INPUT
+
+    def test_classify_is_public_alias(self):
+        """classify 为公开接口，_classify_error 应与其结果一致。"""
+        for err in (ValueError(), OSError(), PermissionError(), KeyError()):
+            assert ErrorHandler.classify(err) == ErrorHandler._classify_error(err)
 
 
 # =============================================================================

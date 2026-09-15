@@ -6,7 +6,7 @@ import pytest
 
 from danmakupro.encode.ffmpeg import FFmpegManager
 from danmakupro.config.models import (
-    EncodeMode, DEFAULT_CONFIG,
+    EncodeMode, SystemParams, DEFAULT_CONFIG,
 )
 from danmakupro.layout.params import LayerParams
 
@@ -23,48 +23,45 @@ def ffmpeg_mgr():
 # _resolve_encode_mode
 # =============================================================================
 
+def _bare_mgr(mode):
+    """构造一个绕过 __init__ 的管理器，只填 _resolve_encode_mode 需要的属性。"""
+    mgr = FFmpegManager.__new__(FFmpegManager)
+    mgr.encode_mode = mode
+    mgr.encode_params = DEFAULT_CONFIG.encode
+    mgr.system_params = DEFAULT_CONFIG.system
+    return mgr
+
+
 class TestResolveEncodeMode:
 
     def test_ffmpeg_not_found_raises(self):
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
-                mgr = FFmpegManager.__new__(FFmpegManager)
-                mgr.encode_mode = EncodeMode.CPU
-                mgr.encode_params = DEFAULT_CONFIG.encode
-                mgr._resolve_encode_mode()
+                _bare_mgr(EncodeMode.CPU)._resolve_encode_mode()
 
     def test_cpu_mode(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            mgr = FFmpegManager.__new__(FFmpegManager)
-            mgr.encode_mode = EncodeMode.CPU
-            mgr.encode_params = DEFAULT_CONFIG.encode
+            mgr = _bare_mgr(EncodeMode.CPU)
             mgr._resolve_encode_mode()
             assert mgr.active_pipeline == EncodeMode.CPU
 
     def test_gpu_mode_nvenc_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_nvenc_available", return_value=True):
-                mgr = FFmpegManager.__new__(FFmpegManager)
-                mgr.encode_mode = EncodeMode.GPU
-                mgr.encode_params = DEFAULT_CONFIG.encode
+                mgr = _bare_mgr(EncodeMode.GPU)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.GPU
 
     def test_gpu_mode_nvenc_unavailable_raises(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
-                mgr = FFmpegManager.__new__(FFmpegManager)
-                mgr.encode_mode = EncodeMode.GPU
-                mgr.encode_params = DEFAULT_CONFIG.encode
                 with pytest.raises(RuntimeError, match="未检测到 NVENC"):
-                    mgr._resolve_encode_mode()
+                    _bare_mgr(EncodeMode.GPU)._resolve_encode_mode()
 
     def test_auto_mode_prefers_nvenc(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_nvenc_available", return_value=True):
-                mgr = FFmpegManager.__new__(FFmpegManager)
-                mgr.encode_mode = EncodeMode.AUTO
-                mgr.encode_params = DEFAULT_CONFIG.encode
+                mgr = _bare_mgr(EncodeMode.AUTO)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.GPU
 
@@ -72,9 +69,7 @@ class TestResolveEncodeMode:
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
                 with patch.object(FFmpegManager, "_check_qsv_available", return_value=True):
-                    mgr = FFmpegManager.__new__(FFmpegManager)
-                    mgr.encode_mode = EncodeMode.AUTO
-                    mgr.encode_params = DEFAULT_CONFIG.encode
+                    mgr = _bare_mgr(EncodeMode.AUTO)
                     mgr._resolve_encode_mode()
                     assert mgr.active_pipeline == EncodeMode.QSV
 
@@ -82,20 +77,103 @@ class TestResolveEncodeMode:
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
                 with patch.object(FFmpegManager, "_check_qsv_available", return_value=False):
-                    mgr = FFmpegManager.__new__(FFmpegManager)
-                    mgr.encode_mode = EncodeMode.AUTO
-                    mgr.encode_params = DEFAULT_CONFIG.encode
+                    mgr = _bare_mgr(EncodeMode.AUTO)
                     mgr._resolve_encode_mode()
                     assert mgr.active_pipeline == EncodeMode.CPU
 
     def test_qsv_mode_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch.object(FFmpegManager, "_check_qsv_available", return_value=True):
-                mgr = FFmpegManager.__new__(FFmpegManager)
-                mgr.encode_mode = EncodeMode.QSV
-                mgr.encode_params = DEFAULT_CONFIG.encode
+                mgr = _bare_mgr(EncodeMode.QSV)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.QSV
+
+
+# =============================================================================
+# 探测结果缓存
+# =============================================================================
+
+class TestProbeCache:
+    """探测结果必须缓存：重复构造不应重跑 ffmpeg 子进程。"""
+
+    def test_probe_runs_once_for_repeated_construction(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True,
+            ) as mock_nvenc:
+                for _ in range(3):
+                    _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+                assert mock_nvenc.call_count == 1
+
+    def test_probe_reruns_after_cache_clear(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True,
+            ) as mock_nvenc:
+                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+                FFmpegManager.clear_probe_cache()
+                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+                assert mock_nvenc.call_count == 2
+
+    def test_probe_reruns_when_ffmpeg_path_differs(self):
+        with patch.object(
+            FFmpegManager, "_check_nvenc_available", return_value=True,
+        ) as mock_nvenc:
+            with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+            with patch("shutil.which", return_value="/opt/other/ffmpeg"):
+                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+            assert mock_nvenc.call_count == 2
+
+    def test_probe_reruns_when_timeout_differs(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True,
+            ) as mock_nvenc:
+                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+                fast = _bare_mgr(EncodeMode.AUTO)
+                fast.system_params = SystemParams(ffmpeg_timeout=30)
+                fast._resolve_encode_mode()
+                assert mock_nvenc.call_count == 2
+
+    def test_cpu_mode_never_probes(self):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=True,
+            ) as mock_nvenc:
+                _bare_mgr(EncodeMode.CPU)._resolve_encode_mode()
+                assert mock_nvenc.call_count == 0
+
+
+# =============================================================================
+# ffmpeg_timeout 接线
+# =============================================================================
+
+class TestTimeoutPlumbing:
+    """ffmpeg_timeout 必须真正驱动子进程超时。"""
+
+    def test_check_nvenc_uses_given_timeout(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(stdout="h264_nvenc", returncode=0),
+                MagicMock(returncode=0),
+            ]
+            FFmpegManager._check_nvenc_available(7)
+            assert [c.kwargs["timeout"] for c in mock_run.call_args_list] == [7, 7]
+
+    def test_ffprobe_uses_configured_timeout(self, ffmpeg_mgr):
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            '{"streams":[{"width":1920,"height":1080,'
+            '"r_frame_rate":"30/1","nb_frames":300}],'
+            '"format":{"duration":"10.0"}}'
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                ffmpeg_mgr.get_video_info()
+                assert mock_run.call_args.kwargs["timeout"] == (
+                    ffmpeg_mgr.system_params.ffmpeg_timeout
+                )
 
 
 # =============================================================================

@@ -348,6 +348,23 @@ class TestAnimationParamsValidation:
         with pytest.raises(ValueError, match="gift_dwell_time"):
             AnimationParams(gift_dwell_time=-1)
 
+    def test_non_positive_max_spawn_latency_raises(self):
+        with pytest.raises(ValueError, match="max_spawn_latency"):
+            AnimationParams(max_spawn_latency=0)
+
+    def test_negative_max_spawn_latency_raises(self):
+        with pytest.raises(ValueError, match="max_spawn_latency"):
+            AnimationParams(max_spawn_latency=-1.0)
+
+    def test_max_spawn_latency_none_disables_adaptive(self):
+        params = AnimationParams(max_spawn_latency=None)
+        assert params.max_spawn_latency is None
+
+    def test_max_spawn_latency_default_is_positive(self):
+        # 类型是 float | None，先收窄再比较（默认值 2.0，语义上不应为 None）
+        latency = AnimationParams().max_spawn_latency
+        assert latency is not None and latency > 0
+
 
 class TestEncodeParamsValidation:
 
