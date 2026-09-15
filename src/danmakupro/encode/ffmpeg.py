@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -17,6 +18,15 @@ from loguru import logger
 
 from ..config.models import EncodeMode, EncodeParams, SystemParams, DEFAULT_CONFIG
 from ..layout.params import LayerParams
+
+#: 探测子进程允许的最小超时（秒），防止用户把 ffmpeg_timeout 配得过小导致误判
+_PROBE_TIMEOUT_MIN = 1
+
+_PIPELINE_LABELS: dict[str, str] = {
+    EncodeMode.GPU: "GPU (NVENC)",
+    EncodeMode.QSV: "QSV",
+    EncodeMode.CPU: "CPU (libx264)",
+}
 
 
 class FFmpegManager:
@@ -56,53 +66,44 @@ class FFmpegManager:
             return self._current_speed
 
     def _resolve_encode_mode(self) -> None:
-        """解析编码模式。"""
-        if shutil.which("ffmpeg") is None:
+        """解析编码模式。
+
+        探测结果按 (编码模式, ffmpeg 路径, 超时) 做进程级缓存，重复构造
+        FFmpegManager（例如 GUI 中反复点击「开始压制」）不会重跑子进程。
+        """
+        ffmpeg_exe = shutil.which("ffmpeg")
+        if ffmpeg_exe is None:
             raise RuntimeError(
                 "未找到 FFmpeg，请先安装:\n"
                 "  Windows: winget install ffmpeg 或 scoop install ffmpeg\n"
                 "  其他系统: https://ffmpeg.org/download.html"
             )
 
-        if self.encode_mode == EncodeMode.CPU:
-            self.active_pipeline = EncodeMode.CPU
-            logger.info("编码模式: CPU (libx264)")
-            return
+        timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
+        resolved = _probe_encode_pipeline(str(self.encode_mode), ffmpeg_exe, timeout)
+        self.active_pipeline = resolved
 
-        if self.encode_mode == EncodeMode.GPU:
-            if not self._check_nvenc_available():
-                raise RuntimeError("未检测到 NVENC 编码器")
-            self.active_pipeline = EncodeMode.GPU
-            logger.info("编码模式: GPU (NVENC)")
-            return
-
-        if self.encode_mode == EncodeMode.QSV:
-            if not self._check_qsv_available():
-                raise RuntimeError("未检测到 QSV 编码器")
-            self.active_pipeline = EncodeMode.QSV
-            logger.info("编码模式: QSV")
-            return
-
-        if self._check_nvenc_available():
-            self.active_pipeline = EncodeMode.GPU
-            logger.info("编码模式: GPU (NVENC) — 自动检测")
-            return
-
-        if self._check_qsv_available():
-            self.active_pipeline = EncodeMode.QSV
-            logger.info("编码模式: QSV — 自动回退")
-            return
-
-        self.active_pipeline = EncodeMode.CPU
-        logger.info("编码模式: CPU (libx264) — 自动回退")
+        label = _PIPELINE_LABELS[resolved]
+        if self.encode_mode == EncodeMode.AUTO:
+            label += " — 自动检测" if resolved == EncodeMode.GPU else " — 自动回退"
+        logger.info(f"编码模式: {label}")
 
     @staticmethod
-    def _check_nvenc_available() -> bool:
+    def clear_probe_cache() -> None:
+        """清空编码器探测缓存。
+
+        硬件或 ffmpeg 安装发生变化（如插入 eGPU、重装 ffmpeg）后调用，
+        否则进程内会一直复用首次探测的结果。测试中亦用于保证用例隔离。
+        """
+        _probe_encode_pipeline.cache_clear()
+
+    @staticmethod
+    def _check_nvenc_available(timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout) -> bool:
         """检查 NVENC 是否可用"""
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=timeout,
             )
             if "h264_nvenc" not in result.stdout:
                 return False
@@ -116,19 +117,19 @@ class FFmpegManager:
                     "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
                     "-c:v", "h264_nvenc", "-f", "null", "-",
                 ],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=timeout,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
 
     @staticmethod
-    def _check_qsv_available() -> bool:
+    def _check_qsv_available(timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout) -> bool:
         """检查 QSV 是否可用"""
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=timeout,
             )
             if "h264_qsv" not in result.stdout:
                 return False
@@ -142,7 +143,7 @@ class FFmpegManager:
                     "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
                     "-c:v", "h264_qsv", "-f", "null", "-",
                 ],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=timeout,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -161,7 +162,10 @@ class FFmpegManager:
             "-show_entries", "stream=width,height,r_frame_rate,nb_frames:format=duration",
             "-of", "json", self.video_in,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True,
+            timeout=self.system_params.ffmpeg_timeout,
+        )
         data = json.loads(result.stdout)
         info = data["streams"][0]
         num, den = map(int, info["r_frame_rate"].split('/'))
@@ -215,6 +219,7 @@ class FFmpegManager:
         return [
             "ffmpeg", "-y",
             "-hwaccel", "qsv",
+            "-hwaccel_output_format", "qsv",
             "-c:v", "h264_qsv",
             "-i", self.video_in,
             "-f", "rawvideo",
@@ -224,7 +229,8 @@ class FFmpegManager:
             "-i", "pipe:0",
             "-filter_complex",
             (
-                f"[0:v]scale_qsv=w={w}:h={h}:mode=hq[bg];"
+                f"[0:v]hwdownload,format=nv12,"
+                f"scale={w}:{h}:flags=lanczos,format=yuv420p[bg];"
                 f"[1:v]format=yuva420p[fg];"
                 f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
             ),
@@ -281,23 +287,35 @@ class FFmpegManager:
             stderr_text = TextIOWrapper(
                 proc.stderr, encoding="utf-8", errors="replace",
             )
-            for line in stderr_text:
-                line_str = line.rstrip("\n\r")
-                if not line_str:
-                    continue
-                if line_str.startswith("frame="):
-                    m = FFmpegManager._SPEED_RE.search(line_str)
-                    if m:
-                        with self._speed_lock:
-                            self._current_speed = float(m.group(1))
-                    continue
-                lower = line_str.lower()
-                if "error" in lower:
-                    logger.error(line_str)
-                elif "warning" in lower:
-                    logger.warning(line_str)
-                else:
-                    logger.debug(line_str)
+            try:
+                for line in stderr_text:
+                    line_str = line.rstrip("\n\r")
+                    if not line_str:
+                        continue
+                    if line_str.startswith("frame="):
+                        m = FFmpegManager._SPEED_RE.search(line_str)
+                        if m:
+                            with self._speed_lock:
+                                self._current_speed = float(m.group(1))
+                        continue
+                    lower = line_str.lower()
+                    if "error" in lower:
+                        logger.error(line_str)
+                    elif "warning" in lower:
+                        logger.warning(line_str)
+                    else:
+                        logger.debug(line_str)
+            except (ValueError, OSError):
+                # cleanup() 可能先行关闭了管道（join 超时后继续收尾），
+                # 此时读取抛 ValueError/OSError 属正常竞态，静默结束即可。
+                return
+            finally:
+                try:
+                    # 分离缓冲区：TextIOWrapper 析构时会关闭底层流，
+                    # 那会销毁 cleanup() 还要用到的 proc.stderr。
+                    stderr_text.detach()
+                except (ValueError, OSError):
+                    pass
 
         self.stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
         self.stderr_thread.start()
@@ -376,3 +394,47 @@ class FFmpegManager:
             except (OSError, BrokenPipeError):
                 pass
         self.process = None
+
+
+# =============================================================================
+# 模块级辅助函数
+# =============================================================================
+
+@functools.lru_cache(maxsize=None)
+def _probe_encode_pipeline(encode_mode: str, ffmpeg_exe: str, timeout: int) -> str:
+    """探测实际可用的编码管线（带进程级缓存）。
+
+    编码器探测要启动 2~4 个 ffmpeg 子进程，实测耗时 auto 1.03s / gpu 1.45s /
+    qsv 2.63s（cpu 无需探测，0.04s）。结果只取决于 ffmpeg 安装与硬件，
+    因此在一个进程内缓存即可 —— 否则每次构造 FFmpegManager 都要重付一遍。
+
+    Args:
+        encode_mode: 用户请求的编码模式
+        ffmpeg_exe: ffmpeg 可执行文件路径（参与缓存 key，换 ffmpeg 即失效）
+        timeout: 单次探测子进程的超时秒数
+
+    Returns:
+        EncodeMode 中实际可用的管线
+
+    Raises:
+        RuntimeError: 显式指定 gpu/qsv 但对应编码器不可用
+    """
+    if encode_mode == EncodeMode.CPU:
+        return EncodeMode.CPU
+
+    if encode_mode == EncodeMode.GPU:
+        if not FFmpegManager._check_nvenc_available(timeout):
+            raise RuntimeError("未检测到 NVENC 编码器")
+        return EncodeMode.GPU
+
+    if encode_mode == EncodeMode.QSV:
+        if not FFmpegManager._check_qsv_available(timeout):
+            raise RuntimeError("未检测到 QSV 编码器")
+        return EncodeMode.QSV
+
+    # AUTO：优先 NVENC，其次 QSV，最后回退 CPU
+    if FFmpegManager._check_nvenc_available(timeout):
+        return EncodeMode.GPU
+    if FFmpegManager._check_qsv_available(timeout):
+        return EncodeMode.QSV
+    return EncodeMode.CPU
