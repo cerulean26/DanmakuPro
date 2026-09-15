@@ -212,8 +212,7 @@ DanmakuPro/
 │   └── utils/                # 工具模块
 │       ├── helpers.py        # 通用工具函数
 │       └── validation.py     # 输入输出校验
-├── tests/                    # 测试
-│   └── test_e2e_burn.py      # 真机端到端用例（标记 slow，默认被 CI 排除）
+├── tests/                    # 测试（18 个模块；test_e2e_burn.py 为真机用例，标记 slow）
 ├── assets/                   # Emoji / 礼物 PNG / 特效资源（本地，未纳入版本控制）
 │   ├── emoji/
 │   ├── gift/
@@ -237,7 +236,8 @@ uv run pytest tests/ -m "not gpu and not slow"
 ```
 
 覆盖率阈值由 `pyproject.toml` 的 `[tool.coverage.report] fail_under` 提供，
-不要在命令行再传 `--cov-fail-under`。测试用例默认需要 `assets/` 之外无任何素材。
+不要在命令行再传 `--cov-fail-under`。测试套件不依赖 `assets/`、`source/`
+等本地素材（e2e 用例的视频由 lavfi 合成）。
 
 ### 真机端到端用例（`slow`）
 
@@ -254,6 +254,16 @@ pytest tests/test_e2e_burn.py -m slow
 ```
 
 未安装 ffmpeg / ffprobe 的环境会自动跳过，不会造成假失败。
+
+> **无头环境的限制（2026-09-15 实测）**：Qt 在 `QT_QPA_PLATFORM=offscreen` 下
+> 拿不到字体引擎——`QFontDatabase().families()` 返回空列表，`QRawFont` 查询字形
+> 会直接段错误。此时字形渲染退化为"豆腐块"（每个字变成空心方框），且
+> `--check` 的字体覆盖判定会给出**偏乐观**的结论。
+>
+> 因此在这批用例里能验证的是「弹幕层有没有叠上去、有没有在尾部冻住」，
+> **验证不了「文字本身有没有正确渲染」**。后者请在真实桌面环境下实跑一次
+> 压制来确认。本项目定位是桌面工具（依赖系统字体），无头服务器场景不在
+> 支持范围内。
 
 ## 许可证
 

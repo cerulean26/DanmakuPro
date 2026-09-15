@@ -66,18 +66,16 @@ markers = [
 # 否则两处阈值会不一致、且本地跑 pytest 时不起作用。
 #
 # 以下数字均为 2026-09-15 实测（pytest tests/ -m "not gpu and not slow"）：
-#   总体 93.18%（1555 条语句 / 106 条未覆盖）
-#   已满覆盖：core/burner.py(195)、core/pipeline.py(61)、layout/engine.py(151)、
-#             config/models.py(115)、input/parser.py(32)、utils/validation.py(33)
-#   薄弱点  ：encode/ffmpeg.py 83%(47) 、render/assets.py 81%(21)、
-#             render/layout_builder.py 91%(17)、cli.py 81%(11)
+#   总体 97%（1557 条语句 / 48 条未覆盖），364 passed
+#   已满覆盖（23 个模块 100%）：core/burner.py(195)、encode/ffmpeg.py(278)、
+#     core/pipeline.py(61)、layout/engine.py(151)、config/models.py(115)、
+#     cli.py(58)、input/parser.py(34)、errors.py(70)、utils/validation.py(33) 等
+#   剩余薄弱点：render/assets.py 81%(21)、render/layout_builder.py 91%(17)、
+#     __init__.py 64%(5)、logger_config.py 83%(4)、utils/helpers.py 92%(1)
 #
-# fail_under = 85 的实际余量：未覆盖语句可再增加 127 条（106 -> 233）才报警。
-# 后果评估（按整块失守计算）：
-#   core/burner.py   失守 -> 80.6%  会被拦住
-#   render/assets.py 失守 -> 86.0%  **拦不住**（85 偏低的表现）
-# 因此建议在确认后提到 90：届时余量 49 条，assets.py 失守 -> 86.0% 会被拦住，
-# 但 ffmpeg.py 整块失守（106+47=153 <= 155）仍拦不住，需靠单测补足。
+# fail_under = 85 的实际余量：未覆盖语句还可再增加 185 条（48 -> 233）才报警。
+# 余量偏大 —— 单模块整块失守已无法触发报警（assets.py 全失守后为 95.6%）。
+# 建议在确认后提到 90（余量 107 条，日常迭代仍安全）或 95（余量 29 条，偏严格）。
 # 阈值调整属质量门禁变更，未经确认前保持 85。
 [tool.coverage.report]
 fail_under = 85
