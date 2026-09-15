@@ -39,5 +39,10 @@ jobs:
 
       - run: uv sync --group dev
 
+      # 覆盖率的统计范围（--cov=src）与及格线（fail_under = 85）均由
+      # pyproject.toml 的 [tool.coverage.report] 提供，此处不再重复传参，
+      # 避免命令行与配置两处阈值不一致。
+      # 注意：windows-latest runner 无 NVIDIA GPU，编码器探测会走非 NVENC
+      # 分支，CI 实测覆盖率可能与本地有出入，需按 CI 数字复核阈值。
       - name: Run pytest
-        run: uv run pytest tests/ --cov-fail-under=60
+        run: uv run pytest tests/

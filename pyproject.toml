@@ -62,6 +62,18 @@ markers = [
     "gpu: marks tests that require GPU hardware",
 ]
 
+# 覆盖率阈值统一在此处定义，命令行不要再传 --cov-fail-under，
+# 否则两处阈值会不一致、且本地跑 pytest 时不起作用。
+# 85 的依据：当前实测 88.27%（1424 条语句 / 167 条未覆盖）。
+# 若 core/burner.py 或 render/assets.py 任一整块失去覆盖，总体会跌到 ~82%，
+# 85 卡在这条线之上，能拦住最脆弱模块的失守；同时比当前值低约 3 个点，
+# 日常新增代码不会误伤（还可增加 46 条未覆盖语句才报警，即 miss 达到 214 条时触发）。
+# 后续补完 burner.check() 后覆盖率约 93.9%，届时应提到 90。
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
+
 [dependency-groups]
 dev = [
     "pyright>=1.1.411",
