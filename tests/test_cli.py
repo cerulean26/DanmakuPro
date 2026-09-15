@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from danmakupro.cli import EXIT_INTERRUPTED, main
+from danmakupro.cli import EXAMPLE_CONFIG, EXIT_INTERRUPTED, init_config, main
 from danmakupro.config.models import EncodeMode
 from danmakupro.errors import DanmakuProError, ErrorCategory
 
@@ -309,3 +309,85 @@ class TestModuleEntrypoint:
             with pytest.raises(SystemExit) as exc:
                 runpy.run_module("danmakupro.cli", run_name="__main__")
         assert exc.value.code == 0
+
+
+class TestInitConfig:
+    """`--init-config`：把随包模板交给用户，是自定义配置的入口。
+
+    配置属用户私有产物，模板本身不参与自动加载 —— 因此这条路径必须能在
+    没有素材、没有 Qt 的情况下独立跑通。
+    """
+
+    def _run(self, *argv):
+        """在给定 argv 下跑 main()，返回 SystemExit 的退出码。"""
+        with patch("sys.argv", ["danmakupro", *argv]), \
+             patch("danmakupro.cli.configure_logger"):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        return exc.value.code
+
+    def test_writes_packaged_template_to_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        code = self._run("--init-config")
+        assert code == 0
+        target = tmp_path / "danmakupro.yaml"
+        assert target.exists()
+        # 生成的内容必须就是随包模板，而不是另写一份
+        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(encoding="utf-8")
+
+    def test_does_not_start_qt(self, tmp_path, monkeypatch):
+        """纯文件操作，不应拉起 QApplication。"""
+        monkeypatch.chdir(tmp_path)
+        with patch("sys.argv", ["danmakupro", "--init-config"]), \
+             patch("danmakupro.cli.configure_logger"), \
+             patch("danmakupro.cli.ensure_qt_app") as mock_qt:
+            with pytest.raises(SystemExit):
+                main()
+        mock_qt.assert_not_called()
+
+    def test_refuses_overwrite_without_force(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "danmakupro.yaml"
+        target.write_text("style:\n  font_size: 99\n", encoding="utf-8")
+        assert self._run("--init-config") == 1
+        assert "font_size: 99" in target.read_text(encoding="utf-8")
+
+    def test_force_overwrites(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "danmakupro.yaml"
+        target.write_text("style:\n  font_size: 99\n", encoding="utf-8")
+        assert self._run("--init-config", "-f") == 0
+        assert target.read_text(encoding="utf-8") == EXAMPLE_CONFIG.read_text(encoding="utf-8")
+
+    def test_config_flag_sets_destination(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        dest = tmp_path / "nested" / "my.yaml"
+        dest.parent.mkdir()
+        assert self._run("--init-config", "-c", str(dest)) == 0
+        assert dest.exists()
+
+    def test_function_returns_zero_on_success(self, tmp_path):
+        dest = tmp_path / "out.yaml"
+        assert init_config(str(dest)) == 0
+        assert dest.exists()
+
+    def test_missing_packaged_template_returns_error(self, tmp_path, monkeypatch):
+        """模板缺失（打包事故）应返回失败码，而不是抛未捕获异常。"""
+        monkeypatch.chdir(tmp_path)
+        with patch("danmakupro.cli.EXAMPLE_CONFIG", tmp_path / "absent.yaml"):
+            assert init_config() == 1
+
+    def test_unwritable_destination_returns_error(self, tmp_path, monkeypatch):
+        """目标被同名目录占位时写入会失败，需返回失败码。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "danmakupro.yaml").mkdir()
+        assert self._run("--init-config", "-f") == 1
+
+    def test_missing_positionals_exit_code_is_2(self, tmp_path, monkeypatch):
+        """video/xml 改为可选后，缺参仍须以退出码 2 失败（与 argparse 一致）。"""
+        monkeypatch.chdir(tmp_path)
+        assert self._run() == 2
+
+    def test_only_video_provided_still_fails(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert self._run("only.mp4") == 2

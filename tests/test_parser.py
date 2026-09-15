@@ -140,6 +140,28 @@ class TestParseGift:
         events = parse_xml(path)
         assert events[0].gift_name == ""
 
+    def test_default_filter_follows_config_not_signature(self, tmp_path):
+        """不传 min_gift_price 时应取配置默认值，而非签名里另写的字面量。
+
+        签名里曾硬编码 1.0，与配置默认值脱节 —— 两者都能「正常工作」，
+        只在改了配置却忘了改签名时静默分叉。用边界值把这条约束钉住。
+        """
+        default = DEFAULT_CONFIG.animation.min_gift_price
+
+        # 恰好等于阈值：必须保留（过滤是「不低于」，含边界）
+        at_threshold = _write_xml(tmp_path, (
+            f'<i><gift ts="1.0" user="u" giftname="火箭" giftcount="1" '
+            f'price="{int(default * 1000)}"/></i>'
+        ))
+        assert len(parse_xml(at_threshold)) == 1
+
+        # 低于阈值一分钱：必须过滤
+        below = _write_xml(tmp_path, (
+            f'<i><gift ts="1.0" user="u" giftname="小花" giftcount="1" '
+            f'price="{int(round((default - 0.001) * 1000))}"/></i>'
+        ))
+        assert len(parse_xml(below)) == 0
+
 
 # =============================================================================
 # 异常分支

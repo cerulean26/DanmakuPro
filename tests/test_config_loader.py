@@ -129,3 +129,62 @@ class TestLoadConfig:
         yaml_path.write_text("null\n", encoding="utf-8")
         cfg = load_config(str(yaml_path))
         assert isinstance(cfg, DanmakuConfig)
+
+
+# =============================================================================
+# 配置来源可见性
+# =============================================================================
+
+@pytest.fixture
+def log_messages():
+    """收集 loguru 的日志文本（loguru 不经过标准 logging，caplog 抓不到）。"""
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m.record["message"]), level="INFO")
+    try:
+        yield messages
+    finally:
+        logger.remove(sink_id)
+
+
+class TestConfigSourceVisibility:
+    """配置来源必须可见。
+
+    配置会随当前工作目录变化（`./danmakupro.yaml` 优先于用户目录），
+    若不说清实际用了哪一份，用户无从判断自己的修改有没有生效。
+    """
+
+    def test_logs_absolute_path_when_loaded(self, tmp_path, log_messages):
+        yaml_path = tmp_path / "cfg.yaml"
+        yaml_path.write_text("style:\n  font_size: 26\n", encoding="utf-8")
+        load_config(str(yaml_path))
+        assert any(str(yaml_path.resolve()) in m for m in log_messages)
+
+    def test_logs_default_when_nothing_found(self, monkeypatch, tmp_path, log_messages):
+        monkeypatch.setattr(
+            "danmakupro.config.loader._config_priority_paths",
+            lambda *a, **kw: [tmp_path / "absent.yaml"],
+        )
+        cfg = load_config()
+        assert cfg is DEFAULT_CONFIG
+        assert any("内置默认值" in m for m in log_messages)
+
+    def test_warns_when_explicit_path_missing(self, monkeypatch, tmp_path, log_messages):
+        """`-c typo.yaml` 不应静默回退到别的配置。"""
+        missing = tmp_path / "typo.yaml"
+        monkeypatch.setattr(
+            "danmakupro.config.loader._config_priority_paths",
+            lambda *a, **kw: [missing],
+        )
+        load_config(str(missing))
+        assert any("指定的配置文件不存在" in m for m in log_messages)
+
+    def test_no_warning_when_auto_search_misses(self, monkeypatch, tmp_path, log_messages):
+        """未显式指定时找不到文件属正常情况，不应告警。"""
+        monkeypatch.setattr(
+            "danmakupro.config.loader._config_priority_paths",
+            lambda *a, **kw: [tmp_path / "absent.yaml"],
+        )
+        load_config()
+        assert not [m for m in log_messages if "指定的配置文件不存在" in m]

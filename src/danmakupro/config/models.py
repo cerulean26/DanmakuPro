@@ -46,7 +46,7 @@ def _assert_positive(obj: object, *names: str) -> None:
 @dataclass(frozen=True)
 class LayoutStyle:
     """布局样式配置"""
-    danmaku_x: int = 30
+    danmaku_x: int = 35
     layer_width_extra: int = 100 
     bubble_padding_x: int = 14
     bubble_padding_y: int = 5
@@ -56,7 +56,7 @@ class LayoutStyle:
     gift_spacing: int = 6
     emoji_spacing: int = 4
     font_size: int = 25
-    fade_out_zone: float = 30.0
+    fade_out_zone: float = 10.0
     bubble_bg_color: tuple[int, int, int, int] = (20, 20, 20, 127)
     username_color: tuple[int, int, int] = (135, 206, 250)
     text_color: tuple[int, int, int] = (255, 255, 255)
@@ -84,9 +84,9 @@ class LayoutRatio:
 
     使用"弹幕行数"替代"高度比例"，用户无需计算像素。
     """
-    max_text_rows: int = 4
+    max_text_rows: int = 8
     max_gift_rows: int = 2
-    text_width_ratio: float = 0.8
+    text_width_ratio: float = 0.825
     bottom_margin: int = 22
 
     def __post_init__(self):
@@ -109,7 +109,7 @@ class AnimationParams:
     # 始终使用固定的 *_spawn_interval。
     max_spawn_latency: float | None = 2.0
     gift_dwell_time: float | None = 5.0
-    min_gift_price: float = 1.0
+    min_gift_price: float = 0.0
 
     def __post_init__(self):
         for name in ("text_damping_factor", "gift_damping_factor"):
@@ -185,5 +185,10 @@ class DanmakuConfig:
 # =============================================================================
 # 默认值
 # =============================================================================
-
+# 各字段默认值即**项目推荐值**（针对直播素材长期调优的结果），也是不带
+# 任何配置文件运行时的生效值。用户可用 danmakupro.yaml 覆盖任意字段。
+#
+# 约束：本处默认值必须与随包分发的 danmakupro.example.yaml 完全一致，
+# 否则「pip 安装后的默认行为」与「模板里给出的值」就会互相矛盾。
+# 该一致性由 tests/test_config_example.py 断言，改任一侧都会立刻暴露。
 DEFAULT_CONFIG = DanmakuConfig()

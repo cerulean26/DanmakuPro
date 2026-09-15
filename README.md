@@ -64,8 +64,11 @@ danmakupro source/视频.mp4 source/弹幕.xml
 # 指定编码模式和输出路径
 danmakupro source/视频.mp4 source/弹幕.xml --encode gpu -o output.mp4 -f
 
+# 生成一份带注释的配置模板到当前目录（已存在时不覆盖，加 -f 覆盖）
+danmakupro --init-config
+
 # 使用自定义配置文件
-danmakupro source/视频.mp4 source/弹幕.xml -c danmakupro.yaml
+danmakupro source/视频.mp4 source/弹幕.xml -c path/to/my.yaml
 ```
 
 `--check` 会输出视频元数据、弹幕事件统计、字体覆盖率（缺失字符及其 Unicode 码点）、
@@ -93,20 +96,46 @@ Emoji / 礼物图片缺失清单，以及发射能力评估（需求速率 vs �
 │         礼物区（上方）         │  ← 可配置行数（默认 2 行）
 │   礼物弹幕从下往上堆叠        │     独立阻尼、淡出、停留时间
 ├──────────────────────────────┤
-│        文本弹幕区（下方）      │  ← 可配置行数（默认 4 行）
+│        文本弹幕区（下方）      │  ← 可配置行数（默认 8 行）
 │   文本弹幕从下往上堆叠        │     含碰撞检测与推挤
 └──────────────────────────────┘
 ```
 
 ## 配置
 
-通过 `danmakupro.yaml` 配置文件调整行为，未指定的字段使用内置默认值。
+**不改配置也能直接用**：不提供任何配置文件时，程序直接使用内置默认值（即下表「默认值」列），
+这些值是针对直播素材长期调优的推荐值。
+
+需要调整时，先生成一份带注释的模板：
+
+```bash
+danmakupro --init-config              # 生成到当前目录 ./danmakupro.yaml
+danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖，加 -f 覆盖
+```
+
+程序按以下顺序查找配置文件，**只取第一个存在的，不做多文件合并**：
+
+| 优先级 | 位置 |
+|---|---|
+| 1 | `--config` / `-c` 指定的路径 |
+| 2 | 当前工作目录 `./danmakupro.yaml` |
+| 3 | 用户目录 `~/danmakupro.yaml` |
+
+> 优先级 2 取决于**当前工作目录**，因此在 A 目录与 B 目录运行同一条命令可能加载不同配置。
+> 每次运行都会在日志中打印实际加载文件的绝对路径；未命中时提示「使用内置默认值」。
+> 用 `-c typo.yaml` 写错路径时会给出警告，不会静默回退。
+
+配置文件属用户私有产物：仓库与安装包都**不携带**会被自动加载的 `danmakupro.yaml`，
+只提供模板 `src/danmakupro/danmakupro.example.yaml`。这样某台机器上的临时调参不会被
+误提交，也就不会静默改变他人的运行结果。模板内容与内置默认值由测试断言保持一致。
+
+下表列出所有可配置字段及其默认值。
 
 ### 布局样式 (style)
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `danmaku_x` | 30 | 弹幕起始 X 坐标（像素） |
+| `danmaku_x` | 35 | 弹幕起始 X 坐标（像素） |
 | `layer_width_extra` | 100 | 渲染层额外宽度（像素） |
 | `bubble_padding_x` | 14 | 气泡水平内边距（像素） |
 | `bubble_padding_y` | 5 | 气泡垂直内边距（像素） |
@@ -116,7 +145,7 @@ Emoji / 礼物图片缺失清单，以及发射能力评估（需求速率 vs �
 | `gift_spacing` | 6 | 礼物图标间距（像素） |
 | `emoji_spacing` | 4 | Emoji 间距（像素） |
 | `font_size` | 25 | 字体大小（pt） |
-| `fade_out_zone` | 30.0 | 淡出区域高度（像素） |
+| `fade_out_zone` | 10.0 | 淡出区域高度（像素） |
 | `bubble_bg_color` | `[20, 20, 20, 127]` | 气泡背景 RGBA（0~255） |
 | `username_color` | `[135, 206, 250]` | 用户名颜色 RGB（0~255） |
 | `text_color` | `[255, 255, 255]` | 正文颜色 RGB（0~255） |
@@ -126,9 +155,9 @@ Emoji / 礼物图片缺失清单，以及发射能力评估（需求速率 vs �
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `max_text_rows` | 4 | 文本弹幕最多显示行数 |
+| `max_text_rows` | 8 | 文本弹幕最多显示行数 |
 | `max_gift_rows` | 2 | 礼物弹幕最多显示行数 |
-| `text_width_ratio` | 0.8 | 文本弹幕最大宽度比例 |
+| `text_width_ratio` | 0.825 | 文本弹幕最大宽度比例 |
 | `bottom_margin` | 22 | 底部边距（像素） |
 
 ### 动画参数 (animation)
@@ -143,7 +172,7 @@ Emoji / 礼物图片缺失清单，以及发射能力评估（需求速率 vs �
 | `gift_spawn_batch_size` | 2 | 礼物弹幕每次发射数量 |
 | `max_spawn_latency` | 2.0 | 有界延迟自适应：积压时按此目标时长收紧间隔（秒），`null` 禁用 |
 | `gift_dwell_time` | 5.0 | 礼物停留时间（秒），null=永不消失 |
-| `min_gift_price` | 1.0 | 最低礼物价格过滤（元） |
+| `min_gift_price` | 0.0 | 最低礼物价格过滤（元），0 = 不过滤 |
 
 ### 编码参数 (encode)
 
@@ -188,6 +217,7 @@ DanmakuPro/
 │   ├── cli.py                # CLI 入口
 │   ├── errors.py             # 错误类型与分类
 │   ├── logger_config.py      # 日志配置
+│   ├── danmakupro.example.yaml  # 配置模板（`--init-config` 的来源，随包分发）
 │   ├── config/               # 配置模块
 │   │   ├── models.py         # 配置数据模型
 │   │   └── loader.py         # YAML 配置加载
@@ -212,13 +242,14 @@ DanmakuPro/
 │   └── utils/                # 工具模块
 │       ├── helpers.py        # 通用工具函数
 │       └── validation.py     # 输入输出校验
-├── tests/                    # 测试（18 个模块；test_e2e_burn.py 为真机用例，标记 slow）
+├── tests/                    # 测试（19 个模块；test_e2e_burn.py 为真机用例，标记 slow）
 ├── assets/                   # Emoji / 礼物 PNG / 特效资源（本地，未纳入版本控制）
 │   ├── emoji/
 │   ├── gift/
 │   └── effect/
 ├── source/                   # 示例素材：视频 + 弹幕 XML（本地，未纳入版本控制）
 ├── scripts/                  # 调试脚本
+├── danmakupro.yaml           # 你的本地配置（可选，未纳入版本控制）
 ├── pyproject.toml
 └── README.md
 ```
@@ -238,6 +269,10 @@ uv run pytest tests/ -m "not gpu and not slow"
 覆盖率阈值由 `pyproject.toml` 的 `[tool.coverage.report] fail_under` 提供，
 不要在命令行再传 `--cov-fail-under`。测试套件不依赖 `assets/`、`source/`
 等本地素材（e2e 用例的视频由 lavfi 合成）。
+
+> 改动 `config/models.py` 的字段默认值时，必须同步修改
+> `src/danmakupro/danmakupro.example.yaml` —— 两者的逐字段一致性由
+> `tests/test_config_example.py` 断言，只改一边会直接变红。
 
 ### 真机端到端用例（`slow`）
 

@@ -98,6 +98,9 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
     按优先级查找：--config 指定 > 当前目录 > 用户目录。
     取第一个存在的文件，不做多文件合并。未找到时返回默认配置。
 
+    无论命中与否都会在日志中说明配置来源 —— 配置随当前工作目录变化，
+    若无声生效，用户很难察觉自己跑的是哪一份配置。
+
     Args:
         config_path: 配置文件路径，为 None 时自动搜索
 
@@ -105,7 +108,12 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
         DanmakuConfig 实例
     """
     user_data: dict[str, Any] = {}
-    for path in _config_priority_paths(config_path):
+    loaded_from: Path | None = None
+    for idx, path in enumerate(_config_priority_paths(config_path)):
+        # 显式指定的路径不存在时给出警告：否则 `-c typo.yaml` 会悄悄
+        # 回退到当前目录/用户目录，用户以为自己指定的配置生效了。
+        if idx == 0 and config_path is not None and not path.exists():
+            logger.warning("指定的配置文件不存在: {}（继续查找默认位置）", path)
         if path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -115,8 +123,12 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
                 raise
             if data is not None:
                 user_data = data
+                loaded_from = path
                 break
 
     if user_data:
+        assert loaded_from is not None
+        logger.info("已加载配置文件: {}", loaded_from.resolve())
         return _dict_to_config(user_data, DanmakuConfig)
+    logger.info("未找到配置文件，使用内置默认值")
     return DEFAULT_CONFIG

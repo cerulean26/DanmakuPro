@@ -26,3 +26,7 @@ output/
 htmlcov/
 .pytest_cache/   
 .ruff_cache/     
+# 用户私有配置：模板见 src/danmakupro/danmakupro.example.yaml
+# 不跟踪的原因 —— 它会被 CLI 隐式加载（当前目录优先），一旦提交，
+# 某台机器上的临时调参会静默改变其他人的运行结果。
+/danmakupro.yaml

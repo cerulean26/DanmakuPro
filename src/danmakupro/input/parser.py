@@ -8,15 +8,21 @@ from __future__ import annotations
 from lxml import etree  # type: ignore
 from loguru import logger
 
+from ..config.models import DEFAULT_CONFIG
 from .event import DanmakuEvent
 
 
-def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
+def parse_xml(
+    xml_path: str, min_gift_price: float | None = None,
+) -> list[DanmakuEvent]:
     """解析 XML 弹幕文件
 
     Args:
         xml_path: XML 文件路径
-        min_gift_price: 最低礼物价格过滤（单位：元）
+        min_gift_price: 最低礼物价格过滤（单位：元）。
+            为 None 时取内置默认值，而**不是**在这里另写一个字面量 ——
+            签名里再写一份默认值就成了第二处真相源，改了配置却忘了改签名，
+            过滤行为会静默地不一致。
 
     Returns:
         按时间排序的弹幕事件列表
@@ -25,6 +31,8 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
         XML 中 gift 的 price 属性单位为厘（1元=1000厘），
         解析时自动转换为元。
     """
+    if min_gift_price is None:
+        min_gift_price = DEFAULT_CONFIG.animation.min_gift_price
     events: list[DanmakuEvent] = []
 
     for _event, elem in etree.iterparse(
