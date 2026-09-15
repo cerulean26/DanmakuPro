@@ -1,6 +1,9 @@
 """统一错误处理
 
-定义项目中的错误类型和错误处理器。所有错误均终止任务。
+定义项目中的错误类型、错误分类与错误处理器。
+
+分类结果用于决定日志级别、CLI 退出信息与错误归属。是否终止任务由调用方决定：
+``ErrorHandler.handle`` 只做记录，不抛出；需要中止时由调用方 re-raise 或包装。
 """
 
 from __future__ import annotations
@@ -113,7 +116,7 @@ class ErrorHandler:
             category = error.category
             message = str(error)
         else:
-            category = cls._classify_error(error)
+            category = cls.classify(error)
             message = f"[{category.value}] {str(error)}"
 
         log_func = getattr(logger, log_level)
@@ -126,17 +129,27 @@ class ErrorHandler:
             logger.debug(f"错误详情: {context.details}")
 
     @classmethod
-    def _classify_error(cls, error: Exception) -> ErrorCategory:
-        """根据异常类型分类"""
+    def classify(cls, error: Exception) -> ErrorCategory:
+        """根据异常类型推断错误分类。
+
+        判断顺序有语义：``FileNotFoundError`` / ``IsADirectoryError`` 是
+        ``OSError`` 的子类，``PermissionError`` 也是 —— 子类必须先于父类判断，
+        否则会被误判为编码错误。
+        """
         if isinstance(error, (FileNotFoundError, IsADirectoryError, ValueError)):
             return ErrorCategory.INPUT
-        if isinstance(error, (BrokenPipeError, OSError)):
-            return ErrorCategory.ENCODE
         if isinstance(error, (MemoryError, PermissionError)):
             return ErrorCategory.SYSTEM
+        if isinstance(error, (BrokenPipeError, OSError)):
+            return ErrorCategory.ENCODE
         if isinstance(error, RuntimeError):
             return ErrorCategory.RENDER
         return ErrorCategory.UNKNOWN
+
+    @classmethod
+    def _classify_error(cls, error: Exception) -> ErrorCategory:
+        """兼容旧调用方的别名，等价于 :meth:`classify`。"""
+        return cls.classify(error)
 
 
 # =============================================================================

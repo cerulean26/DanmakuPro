@@ -45,6 +45,10 @@ def main() -> None:
         "-f", "--force", action="store_true", default=False,
         help="强制覆盖已存在的输出文件",
     )
+    parser.add_argument(
+        "--check", action="store_true", default=False,
+        help="仅检查资源完整性，不执行压制（字体/图片覆盖率、视频信息）",
+    )
     args = parser.parse_args()
     configure_logger()
     ensure_qt_app()
@@ -64,12 +68,17 @@ def main() -> None:
         raise SystemExit(1)
     # 捕获处理Burner时的异常，避免程序崩溃
     try:
-        burner.run()
+        if args.check:
+            burner.check()
+        else:
+            burner.run()
     except DanmakuProError as e:
-        logger.error(f"压制失败 [{e.category.value}]: {e}")
+        action = "资源检查" if args.check else "压制"
+        logger.error(f"{action}失败 [{e.category.value}]: {e}")
         raise SystemExit(1)
     except Exception as e:
-        handle_error(e, component="cli", operation="run")
+        action = "check" if args.check else "run"
+        handle_error(e, component="cli", operation=action)
         raise SystemExit(1)
     finally:
         app = QApplication.instance()

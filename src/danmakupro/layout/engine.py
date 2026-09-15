@@ -27,14 +27,53 @@ class LayoutContext:
     animation: AnimationParams = field(default_factory=lambda: DEFAULT_CONFIG.animation)
     text_event_idx: int = 0
     gift_event_idx: int = 0
-    # 上次发射文本弹幕的时间。0.0 表示尚未发射过。
-    last_text_spawn_time: float = 0.0
-    # 上次发射礼物弹幕的时间。0.0 表示尚未发射过。
-    last_gift_spawn_time: float = 0.0
+    # 上次发射文本弹幕的时间。-1.0 表示尚未发射过。
+    last_text_spawn_time: float = -1.0
+    # 上次发射礼物弹幕的时间。-1.0 表示尚未发射过。
+    last_gift_spawn_time: float = -1.0
 
 
 class LayoutEngine:
     """布局引擎"""
+
+    @staticmethod
+    def effective_spawn_interval(
+        pending: int,
+        batch_size: int,
+        spawn_interval: float,
+        max_latency: float | None,
+    ) -> float:
+        """按积压量自适应收紧发射间隔（有界延迟控制）。
+
+        基础排空速率是 ``batch_size / spawn_interval``（默认 3 / 0.5s = 6 条/秒）。
+        当积压超过一个批次、且按基础速率清空积压需要的时间超过 ``max_latency`` 时，
+        临时缩短间隔，把排空速率提升到 ``pending / max_latency``。
+
+        控制律 ``drain = max(base_rate, pending / max_latency)`` 的稳态解是
+        ``pending* = arrival_rate × max_latency``：只要到达率高于基础速率，积压会
+        收敛到一个**有界**平衡点，而不是像固定间隔那样单调增长 —— 固定间隔下
+        积压会一直累积，视频结束时残留在队列里的事件被永久丢弃，且积压期间
+        弹幕严重滞后于画面（实测 p95 延迟 19.5s、最大 38s）。
+
+        实际排空速率还有一个天然上限：间隔门每帧最多触发一次，故不会超过
+        ``batch_size × fps``，极端突发下会自动饱和而不会失控。
+
+        Args:
+            pending: 当前时间窗口内尚未发射的同层弹幕数
+            batch_size: 单次发射上限
+            spawn_interval: 基础发射间隔（秒）
+            max_latency: 允许的最大积压等待时长（秒）；None 表示禁用自适应
+
+        Returns:
+            本帧应使用的发射间隔（秒）
+        """
+        if max_latency is None or spawn_interval <= 0 or pending <= batch_size:
+            return spawn_interval
+        base_rate = batch_size / spawn_interval
+        need_rate = pending / max_latency
+        if need_rate <= base_rate:
+            return spawn_interval
+        return batch_size / need_rate
 
     @staticmethod
     def calculate_params(
@@ -109,96 +148,143 @@ class LayoutEngine:
 
         无积压时（待处理量 <= batch_size）立即发射，无需等待间隔；
         有积压时启用时间窗口和批次限制，平滑弹幕密度。
+        积压超过一个批次时，间隔按 ``max_spawn_latency`` 自适应收紧
+        （见 :meth:`effective_spawn_interval`），避免积压无界累积导致
+        弹幕滞后或视频结束时被丢弃。
         Returns:
             (text_has_new, gift_has_new, text_emitted, gift_emitted)
         """
         animation = ctx.animation
         pool = event_pool
-        n = len(pool)
 
-        from ..render.active_view import ActiveDanmakuView  # 惰性导入，避免循环依赖
-
-        # ── 文本弹幕：独立扫描 ──────────────────────────────
-        text_pending = 0
-        text_scan_end = ctx.text_event_idx
-        for i in range(ctx.text_event_idx, n):
-            if pool[i].time > current_time:
-                break
-            if not pool[i].is_gift:
-                text_pending += 1
-            text_scan_end = i + 1
-
-        text_can = (
-            text_pending <= animation.text_spawn_batch_size
-            or ctx.last_text_spawn_time == 0.0
-            or (current_time - ctx.last_text_spawn_time) >= animation.text_spawn_interval
+        text_emitted = LayoutEngine._spawn_layer(
+            ctx=ctx,
+            current_time=current_time,
+            pool=pool,
+            want_gift=False,
+            active=active_text,
+            batch_size=animation.text_spawn_batch_size,
+            spawn_interval=animation.text_spawn_interval,
+            max_latency=animation.max_spawn_latency,
+            idx_attr="text_event_idx",
+            last_spawn_attr="last_text_spawn_time",
+            layout_builder=layout_builder,
+            asset_provider=asset_provider,
+            style=style,
         )
 
-        text_emitted = 0
-        while ctx.text_event_idx < text_scan_end and text_can and text_emitted < animation.text_spawn_batch_size:
-            event = pool[ctx.text_event_idx]
-            if not event.is_gift:
-                dm = ActiveDanmaku(
-                    event=event,
-                    layout=layout_builder.build(event),
-                    x=style.danmaku_x,
-                )
-                view = ActiveDanmakuView(dm)
-                view.pre_render(
-                    asset_provider.font,
-                    asset_provider.emoji_cache,
-                    asset_provider.gift_cache,
-                    style.bubble_bg_color,
-                )
-                view.spawn_time = current_time
-                active_text.append(view)
-                text_emitted += 1
-            ctx.text_event_idx += 1
-
-        if text_emitted > 0:
-            ctx.last_text_spawn_time = current_time
-
-        # ── 礼物弹幕：独立扫描 ──────────────────────────────
-        gift_pending = 0
-        gift_scan_end = ctx.gift_event_idx
-        for i in range(ctx.gift_event_idx, n):
-            if pool[i].time > current_time:
-                break
-            if pool[i].is_gift:
-                gift_pending += 1
-            gift_scan_end = i + 1
-
-        gift_can = (
-            gift_pending <= animation.gift_spawn_batch_size
-            or ctx.last_gift_spawn_time == 0.0
-            or (current_time - ctx.last_gift_spawn_time) >= animation.gift_spawn_interval
+        gift_emitted = LayoutEngine._spawn_layer(
+            ctx=ctx,
+            current_time=current_time,
+            pool=pool,
+            want_gift=True,
+            active=active_gift,
+            batch_size=animation.gift_spawn_batch_size,
+            spawn_interval=animation.gift_spawn_interval,
+            max_latency=animation.max_spawn_latency,
+            idx_attr="gift_event_idx",
+            last_spawn_attr="last_gift_spawn_time",
+            layout_builder=layout_builder,
+            asset_provider=asset_provider,
+            style=style,
         )
-
-        gift_emitted = 0
-        while ctx.gift_event_idx < gift_scan_end and gift_can and gift_emitted < animation.gift_spawn_batch_size:
-            event = pool[ctx.gift_event_idx]
-            if event.is_gift:
-                dm = ActiveDanmaku(
-                    event=event,
-                    layout=layout_builder.build(event),
-                    x=style.danmaku_x,
-                )
-                view = ActiveDanmakuView(dm)
-                view.pre_render(
-                    asset_provider.font,
-                    asset_provider.emoji_cache,
-                    asset_provider.gift_cache,
-                    style.bubble_bg_color,
-                )
-                view.spawn_time = current_time
-                active_gift.append(view)
-                gift_emitted += 1
-            ctx.gift_event_idx += 1
-
-        if gift_emitted > 0:
-            ctx.last_gift_spawn_time = current_time
 
         return text_emitted > 0, gift_emitted > 0, text_emitted, gift_emitted
+
+    @staticmethod
+    def _spawn_layer(
+        *,
+        ctx: LayoutContext,
+        current_time: float,
+        pool: list['DanmakuEvent'],
+        want_gift: bool,
+        active: list['ActiveDanmakuView'],
+        batch_size: int,
+        spawn_interval: float,
+        max_latency: float | None,
+        idx_attr: str,
+        last_spawn_attr: str,
+        layout_builder: 'DanmakuLayoutBuilder',
+        asset_provider: 'AssetLoader',
+        style: LayoutStyle,
+    ) -> int:
+        """发射单层弹幕（文本层与礼物层共用同一套节流逻辑）。
+
+        扫描游标与「上次发射时间」通过属性名定位，因此两层各自独立推进：
+        文本积压不会挡住排在后面的礼物，反之亦然。
+
+        Args:
+            ctx: 布局上下文（读写其中的游标与上次发射时间）
+            current_time: 当前帧时间（秒）
+            pool: 全部弹幕事件
+            want_gift: True 处理礼物层，False 处理文本层
+            active: 该层的活跃弹幕列表（就地追加）
+            batch_size: 单次发射上限
+            spawn_interval: 有积压时的最小发射间隔（秒）
+            max_latency: 积压时的目标清空时长（秒），None 表示禁用自适应
+            idx_attr: ctx 上的扫描游标属性名
+            last_spawn_attr: ctx 上的上次发射时间属性名
+            layout_builder: 弹幕布局构建器
+            asset_provider: 资源提供者（字体、emoji/礼物缓存）
+            style: 布局样式
+
+        Returns:
+            本帧实际发射的条数
+        """
+        from ..render.active_view import ActiveDanmakuView  # 惰性导入，避免循环依赖
+
+        n = len(pool)
+        idx = getattr(ctx, idx_attr)
+
+        # ── 统计时间窗口内的待处理量，并确定扫描终点 ──────────
+        pending = 0
+        scan_end = idx
+        for i in range(idx, n):
+            if pool[i].time > current_time:
+                break
+            if pool[i].is_gift == want_gift:
+                pending += 1
+            scan_end = i + 1
+
+        last_spawn = getattr(ctx, last_spawn_attr)
+        effective_interval = LayoutEngine.effective_spawn_interval(
+            pending, batch_size, spawn_interval, max_latency,
+        )
+        can_spawn = (
+            pending <= batch_size
+            or last_spawn < 0.0
+            or (current_time - last_spawn) >= effective_interval
+        )
+
+        if not can_spawn:
+            return 0
+
+        # ── 按批次上限发射，游标扫过窗口内全部事件 ──────────
+        emitted = 0
+        while idx < scan_end and emitted < batch_size:
+            event = pool[idx]
+            if event.is_gift == want_gift:
+                dm = ActiveDanmaku(
+                    event=event,
+                    layout=layout_builder.build(event),
+                    x=style.danmaku_x,
+                )
+                view = ActiveDanmakuView(dm)
+                view.pre_render(
+                    asset_provider.font,
+                    asset_provider.emoji_cache,
+                    asset_provider.gift_cache,
+                    style.bubble_bg_color,
+                )
+                view.spawn_time = current_time
+                active.append(view)
+                emitted += 1
+            idx += 1
+
+        setattr(ctx, idx_attr, idx)
+        if emitted > 0:
+            setattr(ctx, last_spawn_attr, current_time)
+        return emitted
 
     @staticmethod
     def recycle_out_of_bounds(

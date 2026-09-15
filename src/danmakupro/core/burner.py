@@ -6,6 +6,7 @@ DanmakuBurner 是弹幕压制的编排器，负责步骤串联。
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from ..config.models import DanmakuConfig, DEFAULT_CONFIG, EncodeMode
-from ..errors import DanmakuProError
+from ..errors import DanmakuProError, ErrorContext, ErrorHandler
 from ..input.parser import parse_xml
 from ..layout.engine import LayoutEngine
 from ..render.assets import AssetLoader
@@ -76,6 +77,137 @@ class DanmakuBurner:
             self._config.encode, self._config.system,
         )
 
+    def check(self) -> None:
+        """资源完整性检查模式 —— 不执行实际压制。
+
+        在正式压制前运行，输出以下诊断信息：
+        - 视频元数据（分辨率 / 帧率 / 时长 / 总帧数）
+        - 弹幕事件统计（总数 / 文本 / 礼物）
+        - 字体覆盖率（缺失字符及 Unicode 码点）
+        - Emoji / 礼物图片缺失清单
+        - 编码器可用性（GPU / QSV / CPU）
+        """
+        cfg = self._config
+
+        # Step 1: 解析 XML（与 run() 共享逻辑）
+        events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
+        text_count = sum(1 for e in events if not e.is_gift)
+        gift_count = len(events) - text_count
+        t_min = events[0].time if events else 0.0
+        t_max = events[-1].time if events else 0.0
+        logger.info(
+            f"[1] 解析 XML → {len(events)} 事件"
+            f" (文本 {text_count}+礼物 {gift_count}),"
+            f" {t_min:.1f}~{t_max:.1f}s"
+        )
+
+        # Step 2: 加载资源
+        resource = self._asset_provider.load_assets(events)
+        emoji_ok = len(resource['used_emoji']) - len(resource['missing_emoji'])
+        gift_ok = len(resource['used_gift']) - len(resource['missing_gift'])
+        logger.info(
+            f"[2] 加载资源 → "
+            f"Emoji {emoji_ok}/{len(resource['used_emoji'])}, "
+            f"礼物 {gift_ok}/{len(resource['used_gift'])}"
+        )
+
+        # Step 3: 视频信息
+        v_info = self._frame_encoder.get_video_info()
+        raw_w: int = int(v_info['w'])
+        raw_h: int = int(v_info['h'])
+        fps: float = float(v_info['fps'])
+        total_frames: int = int(v_info['frames'])
+        duration = total_frames / fps
+        logger.info(
+            f"[3] 视频信息 → {raw_w}x{raw_h}, {fps:.0f}fps, "
+            f"{total_frames} 帧 ({duration:.0f}s)"
+        )
+
+        # 编码器可用性（已在 __init__ 中探测）
+        _PIPELINE_LABELS: dict[str, str] = {
+            "gpu": "GPU (NVENC)",
+            "qsv": "QSV",
+            "cpu": "CPU (libx264)",
+        }
+        pipeline_label = _PIPELINE_LABELS.get(
+            self._frame_encoder.active_pipeline,
+            self._frame_encoder.active_pipeline,
+        )
+
+        # ── 发射能力评估 ──
+        anim = cfg.animation
+        text_rate = text_count / duration if duration > 0 else 0
+        gift_rate = gift_count / duration if duration > 0 else 0
+        text_cap = anim.text_spawn_batch_size / anim.text_spawn_interval
+        gift_cap = anim.gift_spawn_batch_size / anim.gift_spawn_interval
+        text_headroom = text_cap / text_rate if text_rate > 0 else float('inf')
+        gift_headroom = gift_cap / gift_rate if gift_rate > 0 else float('inf')
+
+        def _headroom_verdict(headroom: float, lat: float | None) -> str:
+            if headroom >= 2:
+                return f"     ✅ 冗余 {headroom:.0f}x，可全部发射"
+            if headroom >= 1:
+                return "     ⚠️  接近瓶颈，自适应加速可兜底"
+            if lat is not None:
+                return f"     ⚠️  超出基础能力，依赖自适应加速 (max_latency={lat}s)"
+            return "     ❌ 超出基础能力且自适应已禁用，将丢弃弹幕"
+
+        missing_chars: set[str] = resource['missing_chars']
+
+        def _asset_lines(label: str, used: set, missing: set) -> list[str]:
+            ok = len(used) - len(missing)
+            lines = [f"\n  🖼️  {label}: {ok}/{len(used)}"]
+            if missing:
+                for name in sorted(missing):
+                    lines.append(f"     ❌ {name}")
+            elif used:
+                lines.append("     ✅ 全部已加载")
+            else:
+                lines.append("     ℹ️  未使用")
+            return lines
+
+        ok_count = sum([
+            len(missing_chars) == 0,
+            len(resource['missing_emoji']) == 0,
+            len(resource['missing_gift']) == 0,
+        ])
+
+        # ── 构建报告（拼为单条消息，避免 print/log 交叉错位） ──
+        lines: list[str] = []
+        sep = "=" * 60
+        lines.append("")
+        lines.append(sep)
+        lines.append("  资源完整性检查报告")
+        lines.append(sep)
+        lines.append(f"\n  📹 视频: {raw_w}x{raw_h} @ {fps:.0f}fps, "
+                     f"{duration:.0f}s ({total_frames} 帧)")
+        lines.append(f"\n  💬 弹幕: {len(events)} 条"
+                     f" (文本 {text_count}, 礼物 {gift_count})")
+        lines.append(f"     时间范围: {t_min:.1f}s ~ {t_max:.1f}s")
+        lines.append("\n  🚀 发射能力评估:")
+        lines.append(f"     文本: {text_rate:.1f} 条/秒 (需求) vs {text_cap:.0f} 条/秒 (基础能力)")
+        lines.append(_headroom_verdict(text_headroom, anim.max_spawn_latency))
+        lines.append(f"     礼物: {gift_rate:.1f} 条/秒 (需求) vs {gift_cap:.0f} 条/秒 (基础能力)")
+        lines.append(_headroom_verdict(gift_headroom, anim.max_spawn_latency))
+        lines.append(f"\n  🔤 字体覆盖: {resource['total_chars']} 个不同字符")
+        if missing_chars:
+            lines.append(f"     ❌ {len(missing_chars)} 个字符无字体覆盖:")
+            for c in sorted(missing_chars):
+                lines.append(f"        {c!r}  (U+{ord(c):04X})")
+        else:
+            lines.append("     ✅ 全部字符已覆盖")
+        lines.extend(_asset_lines("Emoji 图片", resource['used_emoji'], resource['missing_emoji']))
+        lines.extend(_asset_lines("礼物图片", resource['used_gift'], resource['missing_gift']))
+        lines.append(f"\n  ⚙️  编码器: {pipeline_label}")
+        issues = 3 - ok_count
+        if issues == 0:
+            lines.append("\n  ✅ 所有资源完整，可以开始压制")
+        else:
+            lines.append(f"\n  ⚠️  {issues} 类资源不完整，压制时对应元素将显示为占位符")
+        lines.append(sep)
+
+        logger.opt(raw=True).info("\n".join(lines))
+
     def run(self) -> None:
         """执行完整的弹幕压制流程。
 
@@ -96,27 +228,36 @@ class DanmakuBurner:
         style = cfg.style
         syscfg = cfg.system
 
-        # Step 1
-        events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
-        text_count = sum(1 for e in events if not e.is_gift)
-        t_min = events[0].time if events else 0.0
-        t_max = events[-1].time if events else 0.0
-        logger.info(
-            f"[1] 解析 XML → {len(events)} 事件"
-            f" (文本 {text_count}+礼物 {len(events) - text_count}),"
-            f" {t_min:.1f}~{t_max:.1f}s"
-        )
+        # Step 1-3：ffprobe 与「解析 XML → 加载资源」互不依赖，并发执行。
+        # 串行耗时约 parse 0.18s + assets 0.15s + ffprobe 0.23s；
+        # 并发后只需 max(0.33s, 0.23s)，实测省下约 0.23s 的纯等待。
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="prepare",
+        ) as pool:
+            video_info_future = pool.submit(self._frame_encoder.get_video_info)
 
-        # Step 2
-        self._asset_provider.load_assets(events)
-        logger.info(
-            f"[2] 加载资源 → "
-            f"Emoji {len(self._asset_provider.emoji_cache)}, "
-            f"礼物 {len(self._asset_provider.gift_cache)}"
-        )
+            # Step 1
+            events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
+            text_count = sum(1 for e in events if not e.is_gift)
+            t_min = events[0].time if events else 0.0
+            t_max = events[-1].time if events else 0.0
+            logger.info(
+                f"[1] 解析 XML → {len(events)} 事件"
+                f" (文本 {text_count}+礼物 {len(events) - text_count}),"
+                f" {t_min:.1f}~{t_max:.1f}s"
+            )
 
-        # Step 3
-        v_info = self._frame_encoder.get_video_info()
+            # Step 2
+            self._asset_provider.load_assets(events)
+            logger.info(
+                f"[2] 加载资源 → "
+                f"Emoji {len(self._asset_provider.emoji_cache)}, "
+                f"礼物 {len(self._asset_provider.gift_cache)}"
+            )
+
+            # Step 3
+            v_info = video_info_future.result()
+
         raw_w: int = int(v_info['w'])
         raw_h: int = int(v_info['h'])
         fps: float = float(v_info['fps'])
@@ -172,7 +313,13 @@ class DanmakuBurner:
         except DanmakuProError:
             raise
         except Exception as e:
-            raise RuntimeError(f"压制失败: {e}") from e
+            # 用 ErrorHandler.classify 保留原始异常的类别，而不是一律包成
+            # RuntimeError（那会让 _classify_error 把一切都归为 RENDER）。
+            raise DanmakuProError(
+                f"压制失败: {e}",
+                category=ErrorHandler.classify(e),
+                context=ErrorContext(component="burner", operation="run"),
+            ) from e
         finally:
             self._frame_encoder.cleanup()
 
