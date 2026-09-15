@@ -34,14 +34,22 @@ def parse_xml(xml_path: str, min_gift_price: float = 1.0) -> list[DanmakuEvent]:
         if elem.tag == 'd':
             p_attr = elem.get('p')
             if p_attr:
-                try:
-                    comma_idx = p_attr.find(',')
-                    time_val = float(p_attr[:comma_idx])
-                    user = elem.get('user') or elem.get('uid') or "匿名"
-                    text = elem.text or ""
-                    events.append(DanmakuEvent(time=time_val, user=user, text=text))
-                except (ValueError, IndexError):
-                    logger.debug(f"弹幕解析失败: p={p_attr}")
+                # p 的格式是「时间,类型,用户ID,...」。逗号位置必须显式检查：
+                # str.find 找不到时返回 -1，而 p_attr[:-1] 会静默丢掉末位字符
+                # —— "12.5" 会被解析成 float("12.") == 12.0，时间戳被悄悄截断
+                # 且没有任何告警，是输入层唯一的静默失败点。
+                # comma_idx <= 0 同时覆盖「无逗号」(-1) 与「时间字段为空」(0)。
+                comma_idx = p_attr.find(',')
+                if comma_idx <= 0:
+                    logger.debug(f"弹幕 p 属性格式无效: p={p_attr!r}")
+                else:
+                    try:
+                        time_val = float(p_attr[:comma_idx])
+                        user = elem.get('user') or elem.get('uid') or "匿名"
+                        text = elem.text or ""
+                        events.append(DanmakuEvent(time=time_val, user=user, text=text))
+                    except (ValueError, IndexError):
+                        logger.debug(f"弹幕解析失败: p={p_attr}")
         elif elem.tag == 'gift':
             try:
                 time_val = float(elem.get('ts', 0))

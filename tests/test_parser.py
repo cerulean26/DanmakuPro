@@ -191,6 +191,41 @@ class TestParseMalformed:
         events = parse_xml(path)
         assert len(events) == 0
 
+    def test_danmaku_p_attr_without_comma_is_skipped(self, tmp_path):
+        """p 属性无逗号分隔符时应跳过，而不是静默截断时间。
+
+        回归用例。原实现用 ``p_attr.find(',')`` 定位时间字段，找不到时
+        ``find`` 返回 -1，切片 ``p_attr[:-1]`` 于是丢掉了最后一个字符 ——
+        ``p="12.5"`` 被解析成 ``float("12.") == 12.0``：时间戳静默偏移
+        且没有任何告警。注意 ``p="invalid_p_attr"`` 那条用例**抓不到**这个
+        分支（它含字母，float() 会抛 ValueError 走正常失败路径），必须用
+        「无逗号 + 去掉末位仍是合法浮点」的输入才能触发。
+        """
+        xml = '<i><d p="12.5">无逗号</d></i>'
+        path = _write_xml(tmp_path, xml)
+        events = parse_xml(path)
+        assert len(events) == 0
+
+    def test_danmaku_p_attr_empty_time_field(self, tmp_path):
+        """p 属性以逗号开头（时间字段为空）时应跳过。"""
+        xml = '<i><d p=",0,0">时间字段为空</d></i>'
+        path = _write_xml(tmp_path, xml)
+        events = parse_xml(path)
+        assert len(events) == 0
+
+    def test_danmaku_p_attr_non_numeric_time(self, tmp_path):
+        """p 属性逗号存在但时间字段非数字时应跳过。
+
+        与「无逗号」那条走的是**不同**的失败路径：这里 ``comma_idx > 0``，
+        会真正进入 ``float()`` 并抛 ValueError，落到 except 分支；而无逗号的
+        输入被前置检查拦下、根本不进 ``try``。两条用例合起来才覆盖 p 属性
+        解析的全部失败路径（缺任一条都会有分支失去覆盖）。
+        """
+        xml = '<i><d p="abc,0,0">时间非数字</d></i>'
+        path = _write_xml(tmp_path, xml)
+        events = parse_xml(path)
+        assert len(events) == 0
+
 
 # =============================================================================
 # 混合场景
