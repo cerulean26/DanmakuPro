@@ -140,9 +140,12 @@ class DanmakuBurner:
         # 用 .get 而非下标：vfr 是后加的字段，老调用方（含测试中的 mock）
         # 可能只给四个基本键，缺键时按「非 VFR」处理。
         if v_info.get('vfr'):
+            # 帧率口径已按 frames/duration 修正（见 FFmpegManager
+            # ._resolve_render_fps），时间轴不会漂移，这里只提示观感影响。
             logger.warning(
-                "变帧率(VFR)素材：标称帧率与实测均值不一致。"
-                "弹幕按等间隔帧推算时间，VFR 源上会逐渐漂移"
+                "变帧率(VFR)素材：全片帧率不恒定。"
+                "弹幕已按真实平均帧率生成，时间轴与画面对齐，"
+                "但画面帧率波动时弹幕运动可能略有顿挫"
             )
 
         return events, resource, v_info

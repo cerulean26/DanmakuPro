@@ -22,6 +22,10 @@ from ..layout.params import LayerParams
 #: 探测子进程允许的最小超时（秒），防止用户把 ffmpeg_timeout 配得过小导致误判
 _PROBE_TIMEOUT_MIN = 1
 
+#: 帧率口径修正达到多大相对偏差才值得提示。CFR 素材的容器舍入通常只有
+#: 万分之几（实测 source/5.flv：22.000 → 21.999），逐条打印纯属噪音。
+_FPS_LOG_TOLERANCE = 0.005
+
 _PIPELINE_LABELS: dict[str, str] = {
     EncodeMode.GPU: "GPU (NVENC)",
     EncodeMode.QSV: "QSV",
@@ -34,11 +38,19 @@ class FFmpegManager:
 
     _SPEED_RE = re.compile(r'speed=\s*([\d.]+)x')
 
-    #: VFR 判定容差（相对偏差）。mp4 容器的时间戳舍入会让 avg_frame_rate 与
-    #: r_frame_rate 差约 0.1%（实测本项目产物 1-弹幕版.mp4：r=20/1、
-    #: avg=17005/851≈19.98），故不能要求严格相等；真正的 VFR 素材差异远大于此
-    #: （实测 source/1.flv：r=20/1、avg=22/1，差 10%）。1% 可同时避开两者。
-    _VFR_TOLERANCE = 0.01
+    #: VFR 采样判据：在视频前、中、后各取 _VFR_SAMPLE_SECONDS 秒，比较三段
+    #: 局部帧率的相对极差，超过 _VFR_SAMPLE_TOLERANCE 即判为变帧率。
+    #:
+    #: 不使用 r_frame_rate 与 avg_frame_rate 比对：FLV 的 avg_frame_rate 取自
+    #: onMetaData，实测 source/1.flv 标 22/1、真实 19.985fps，会误报。2% 足以
+    #: 区分容器时间戳舍入（实测本项目产物 0.1%）与真正的帧率波动。
+    _VFR_SAMPLE_TOLERANCE = 0.02
+    _VFR_SAMPLE_SECONDS = 5.0
+
+    #: 帧率口径修正的可信区间：frames/duration 与 r_frame_rate 的比值超出该
+    #: 范围，说明 nb_frames 或 duration 本身不可信，回落到 r_frame_rate。
+    _FPS_SANITY_LO = 1 / 3
+    _FPS_SANITY_HI = 3.0
 
     def __init__(
         self,
@@ -179,16 +191,115 @@ class FFmpegManager:
             return 0.0
         return numerator / denominator
 
+    @staticmethod
+    def _resolve_render_fps(nominal_fps: float, frames: int, duration: float) -> float:
+        """确定渲染用的帧率。
+
+        渲染循环按 frame_index / fps 推算弹幕时间，故弹幕层时间轴长度为
+        frames / fps，它必须等于视频真实时长：短了则弹幕层提前耗尽，画面继续
+        播放而弹幕冻结在最后一帧；长了则画面播完仍在输出弹幕。
+
+        r_frame_rate 只是容器标称值，VFR 源上会明显偏离真实均值（例如标称
+        30fps、真实平均 20fps 时，时间轴只有实际时长的 2/3，尾部弹幕全丢），
+        因此只要 frames 与 duration 可用且二者之比可信，就以 frames/duration
+        为准。这样弹幕时间轴天然等于时长，无需改动视频流本身。
+
+        Args:
+            nominal_fps: r_frame_rate 的解析结果
+            frames: 总帧数
+            duration: 真实时长（秒），不可用时为 0
+
+        Returns:
+            渲染帧率；输入不足或比值离谱时回落到 nominal_fps。
+        """
+        if nominal_fps <= 0 or frames <= 0 or duration <= 0:
+            return nominal_fps
+        real_fps = frames / duration
+        if real_fps <= 0:
+            return nominal_fps
+        ratio = real_fps / nominal_fps
+        if not (FFmpegManager._FPS_SANITY_LO <= ratio <= FFmpegManager._FPS_SANITY_HI):
+            return nominal_fps
+        return real_fps
+
+    @staticmethod
+    def _detect_vfr(local_rates: list[float]) -> bool:
+        """根据各采样段的局部帧率判断是否变帧率。
+
+        Args:
+            local_rates: _sample_local_frame_rates 的返回值
+
+        Returns:
+            采样段不足时返回 False（无法判定时不误报）。
+        """
+        if len(local_rates) < 2:
+            return False
+        lo = min(local_rates)
+        hi = max(local_rates)
+        return lo > 0 and (hi - lo) / lo > FFmpegManager._VFR_SAMPLE_TOLERANCE
+
+    def _sample_local_frame_rates(self, duration: float) -> list[float]:
+        """在视频前、中、后各采样一段，返回各段的局部帧率（fps）。
+
+        Args:
+            duration: 视频总时长（秒）
+
+        Returns:
+            各采样段的局部帧率。无法采样或样本不足时返回空列表，
+            调用方据此按「无法判定」处理而不是误报 VFR。
+        """
+        # 短片没必要采样：三段加起来就接近全片，且 seek 误差占比过高。
+        if duration < self._VFR_SAMPLE_SECONDS * 3:
+            return []
+        starts = (
+            0.0,
+            duration / 2,
+            max(0.0, duration - self._VFR_SAMPLE_SECONDS),
+        )
+        timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
+        rates: list[float] = []
+        for start in starts:
+            spec = f"{start:.3f}%+" + f"{self._VFR_SAMPLE_SECONDS:.3f}"
+            cmd = [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-read_intervals", spec,
+                "-show_entries", "frame=pts_time", "-of", "json",
+                self.video_in,
+            ]
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True,
+                    timeout=timeout,
+                )
+                raw = json.loads(result.stdout).get("frames", [])
+            except (subprocess.SubprocessError, OSError, ValueError):
+                return []
+            pts: list[float] = []
+            for item in raw:
+                try:
+                    pts.append(float(item["pts_time"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if len(pts) < 2:
+                return []
+            span = pts[-1] - pts[0]
+            if span <= 0:
+                return []
+            rates.append((len(pts) - 1) / span)
+        return rates
+
     def get_video_info(self) -> dict[str, int | float | bool]:
         """获取视频元数据。
 
         Returns:
-            w / h / fps / frames 四个基本字段，外加 vfr 标记：
-            标称帧率（r_frame_rate）与实际均值（avg_frame_rate）相对偏差
-            超过 _VFR_TOLERANCE 时为 True，表示这是变帧率素材。
+            w / h / fps / frames 四个基本字段，外加 vfr 标记。
 
-            渲染循环按 frame_index / fps 等间隔推算弹幕时间，VFR 源上
-            推算值与画面真实时间不吻合，弹幕会逐渐漂移，故需向上报告。
+            fps 是**渲染用**帧率，可能不等于 r_frame_rate：当 nb_frames 与
+            duration 可用时取 frames / duration，以保证弹幕时间轴长度等于
+            视频真实时长（详见 _resolve_render_fps）。
+
+            vfr 为 True 表示采样发现全片帧率不恒定。弹幕时间轴已按真实平均
+            帧率对齐，不会漂移，但画面帧率波动时弹幕运动会略有顿挫。
         """
         if shutil.which("ffprobe") is None:
             raise RuntimeError(
@@ -199,7 +310,7 @@ class FFmpegManager:
         cmd = [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate,avg_frame_rate,nb_frames:format=duration",
+            "stream=width,height,r_frame_rate,nb_frames:format=duration",
             "-of", "json", self.video_in,
         ]
         result = subprocess.run(
@@ -208,8 +319,7 @@ class FFmpegManager:
         )
         data = json.loads(result.stdout)
         info = data["streams"][0]
-        fps = FFmpegManager._parse_frame_rate(info.get("r_frame_rate"))
-        avg_fps = FFmpegManager._parse_frame_rate(info.get("avg_frame_rate"))
+        nominal_fps = FFmpegManager._parse_frame_rate(info.get("r_frame_rate"))
 
         # nb_frames 在 flv/mp4 上可能缺失或为 "N/A"，不能无条件 int()。
         raw_frames = info.get("nb_frames")
@@ -218,14 +328,22 @@ class FFmpegManager:
         except (TypeError, ValueError):
             frames = 0
 
-        if frames == 0:
-            dur = float(data["format"]["duration"])
-            frames = int(dur * fps)
+        try:
+            duration = float(data["format"]["duration"])
+        except (KeyError, TypeError, ValueError):
+            duration = 0.0
 
-        vfr = bool(
-            fps > 0 and avg_fps > 0
-            and abs(fps - avg_fps) / fps > FFmpegManager._VFR_TOLERANCE
-        )
+        if frames == 0:
+            frames = int(duration * nominal_fps)
+
+        fps = FFmpegManager._resolve_render_fps(nominal_fps, frames, duration)
+        if (nominal_fps > 0
+                and abs(fps - nominal_fps) / nominal_fps > _FPS_LOG_TOLERANCE):
+            logger.info(
+                f"帧率口径修正: r_frame_rate {nominal_fps:.3f} → "
+                f"实测均值 {fps:.3f} (弹幕时间轴按实测值对齐)"
+            )
+        vfr = FFmpegManager._detect_vfr(self._sample_local_frame_rates(duration))
 
         return {
             "w": int(info["width"]),
