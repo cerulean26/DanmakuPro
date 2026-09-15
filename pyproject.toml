@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "抖音直播弹幕压制工具"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 dependencies = [
     "loguru>=0.7.3",
     "lxml>=6.1.1",
@@ -18,6 +20,10 @@ danmakupro = "danmakupro.cli:main"
 [tool.pyright]
 extraPaths = ["src"]
 typeCheckingMode = "basic"
+# 显式指向项目虚拟环境，否则 pyright 解析不到第三方依赖，
+# 会为每行 import 报 "Import could not be resolved"。
+venvPath = "."
+venv = ".venv"
 
 [build-system]
 requires = ["hatchling"]
