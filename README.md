@@ -248,7 +248,6 @@ DanmakuPro/
 │   ├── gift/
 │   └── effect/
 ├── source/                   # 示例素材：视频 + 弹幕 XML（本地，未纳入版本控制）
-├── scripts/                  # 调试脚本
 ├── danmakupro.yaml           # 你的本地配置（可选，未纳入版本控制）
 ├── pyproject.toml
 └── README.md
