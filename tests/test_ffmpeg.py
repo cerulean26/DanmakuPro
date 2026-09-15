@@ -460,15 +460,24 @@ class TestProcessLifecycle:
         ffmpeg_mgr.process = None
         ffmpeg_mgr.cleanup()
 
-    def test_cleanup_interrupted_not_marked_success(self, ffmpeg_mgr):
-        """中断时 FFmpeg 也可能以 0 退出，不能记成压制成功。
+    @pytest.mark.parametrize(
+        "return_code",
+        [
+            0,    # 只在 Python 侧中断，FFmpeg 按 stdin EOF 正常收尾
+            255,  # 控制台 Ctrl+C 连带杀掉 FFmpeg（Windows 实测码）
+        ],
+    )
+    def test_cleanup_interrupted_not_marked_success(
+        self, ffmpeg_mgr, return_code,
+    ):
+        """中断时无论 FFmpeg 怎么退出，都不能记成压制成功。
 
-        否则日志会同时出现「压制完成」与「已取消」，残缺产物也会被当成成品。
+        更关键的是也不能记成「压制失败」：那是主动取消，不是故障。
         """
         mock_proc = MagicMock()
         mock_proc.stdin = MagicMock()
         mock_proc.stderr = MagicMock()
-        mock_proc.wait.return_value = 0
+        mock_proc.wait.return_value = return_code
         ffmpeg_mgr.process = mock_proc
         ffmpeg_mgr.stderr_thread = MagicMock()
         ffmpeg_mgr.stderr_thread.is_alive.return_value = False

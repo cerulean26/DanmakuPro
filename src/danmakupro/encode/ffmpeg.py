@@ -556,10 +556,14 @@ class FFmpegManager:
         # 第三步：等待 FFmpeg 进程退出
         try:
             return_code = proc.wait(timeout=600.0)
-            if return_code == 0 and self.interrupted:
-                # 中断时 FFmpeg 只是把已写入的帧收了个尾，输出是残缺的。
-                # 这里不能记成功，否则日志会和「已取消」自相矛盾。
-                logger.warning("编码已随中断结束，输出不完整")
+            if self.interrupted:
+                # 中断时 FFmpeg 有两种死法：控制台 Ctrl+C 会连带杀掉它
+                # （Windows 实测 code=255），只在 Python 侧中断则它按
+                # stdin EOF 正常收尾（code=0）。两者都不是「成功」也不是
+                # 「失败」，输出同样残缺，故统一按中断记，不用 ERROR。
+                logger.warning(
+                    f"编码已随中断结束 (code={return_code})，输出不完整"
+                )
             elif return_code == 0:
                 self.encode_succeeded = True
                 logger.success(f"压制完成: {self.video_out}")

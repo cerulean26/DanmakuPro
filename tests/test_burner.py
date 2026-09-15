@@ -225,3 +225,49 @@ class TestBurnerRun:
             mock_encoder.cleanup.assert_called_once()
             # 中断同失败：不允许留下残缺产物挡住下次运行
             assert not out.exists()
+
+    def test_discards_output_when_interrupt_hits_cleanup(
+        self, mock_deps, tmp_path,
+    ):
+        """中断恰好落在收尾期间时，产物清理不能被跳过。
+
+        Ctrl+C 会同时送达 Python 与 ffmpeg，两者到达时刻有先后。若中断在
+        cleanup() 等待 FFmpeg 退出时到达，就会从 finally 中抛出；此时若
+        清理代码与 cleanup() 是串行的，残缺文件就会留下，下次运行又被
+        「输出文件已存在」挡住 —— 即 P1-5 修过的问题复发。
+        """
+        video = tmp_path / "test.mp4"
+        video.touch()
+        xml = tmp_path / "test.xml"
+        xml.touch()
+        out = tmp_path / "out.mp4"
+        out.touch()
+
+        events = [DanmakuEvent(time=0.5, user="u", text="hello")]
+        mock_encoder = MagicMock()
+        mock_encoder.get_video_info.return_value = {
+            "w": 1920, "h": 1080, "fps": 30, "frames": 300, "vfr": False,
+        }
+        mock_encoder.build_command.return_value = ["ffmpeg", "..."]
+        # 模拟中断在收尾期间抵达
+        mock_encoder.cleanup.side_effect = KeyboardInterrupt
+
+        with patch("danmakupro.core.burner.parse_xml", return_value=events), \
+             patch("danmakupro.core.burner.RenderPipeline") as mock_pipeline_cls, \
+             patch("danmakupro.core.burner.DanmakuLayoutBuilder"), \
+             patch("danmakupro.core.burner.LayoutEngine") as mock_engine:
+
+            mock_engine.calculate_params.return_value = (MagicMock(), MagicMock())
+            mock_pipeline = MagicMock()
+            mock_pipeline.run.side_effect = KeyboardInterrupt
+            mock_pipeline_cls.return_value = mock_pipeline
+
+            burner = DanmakuBurner(
+                str(video), str(xml), video_out=str(out),
+                config=DEFAULT_CONFIG, force=True,
+            )
+            burner._frame_encoder = mock_encoder
+            with pytest.raises(KeyboardInterrupt):
+                burner.run()
+            # 收尾被打断，但产物清理仍必须完成
+            assert not out.exists()

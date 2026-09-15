@@ -74,6 +74,7 @@ def main() -> None:
     except Exception as e:
         handle_error(e, component="cli", operation="create_burner")
         raise SystemExit(1)
+
     # 捕获处理Burner时的异常，避免程序崩溃
     try:
         if args.check:
@@ -83,7 +84,7 @@ def main() -> None:
     except KeyboardInterrupt:
         # KeyboardInterrupt 继承自 BaseException，上面的 except Exception
         # 抓不到，必须单独处理，否则会以平台相关的状态码退出。
-        logger.warning("已取消")
+        logger.warning("已取消，未生成完整输出文件")
         raise SystemExit(EXIT_INTERRUPTED)
     except DanmakuProError as e:
         action = "资源检查" if args.check else "压制"

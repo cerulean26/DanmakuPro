@@ -332,9 +332,10 @@ class DanmakuBurner:
             )
         except KeyboardInterrupt:
             failed = True
-            # 标记中断，让 cleanup 不要把 FFmpeg 的正常退出报成「压制完成」。
+            # 标记中断，让 cleanup 不要把 FFmpeg 的退出报成「压制成功/失败」。
             self._frame_encoder.interrupted = True
-            logger.warning("用户中断压制")
+            # 收尾要等 FFmpeg 退出、删除残缺产物，可能耗时，先给即时反馈。
+            logger.warning("收到中断信号，正在收尾…")
             # 必须继续抛出。吞掉中断会让进程以 0 退出，脚本/编排方无法把
             # 「用户按了 Ctrl+C」和「压制成功」区分开，残缺产物也会被当成成品。
             # 资源清理由 finally 负责，抛出不影响收尾。
@@ -352,9 +353,16 @@ class DanmakuBurner:
                 context=ErrorContext(component="burner", operation="run"),
             ) from e
         finally:
-            self._frame_encoder.cleanup()
-            if failed or not self._frame_encoder.encode_succeeded:
-                self._discard_incomplete_output()
+            # 中断可能恰好落在收尾期间：Ctrl+C 会同时送达 Python 与
+            # ffmpeg，两者到达时刻有先后，若中断在 cleanup() 等待 FFmpeg
+            # 退出时到达，就会从 finally 中抛出，跳过后面的产物清理 ——
+            # 残缺文件留下，下次运行又被「输出文件已存在」挡住。
+            # 嵌套 try/finally 保证无论收尾是否被打断，清理都会执行。
+            try:
+                self._frame_encoder.cleanup()
+            finally:
+                if failed or not self._frame_encoder.encode_succeeded:
+                    self._discard_incomplete_output()
 
     def _discard_incomplete_output(self) -> None:
         """删除未成功完成时留下的残缺输出文件。

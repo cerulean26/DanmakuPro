@@ -65,6 +65,18 @@ danmakupro source/视频.mp4 source/弹幕.xml --encode gpu -o output.mp4 -f
 danmakupro source/视频.mp4 source/弹幕.xml -c danmakupro.yaml
 ```
 
+### 3. 退出码与中断
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 压制成功 |
+| `1` | 失败（输入无效、编码错误等） |
+| `130` | 用户中断（Ctrl+C） |
+
+按 `Ctrl+C` 中断时，程序不会立刻退出：它先等 FFmpeg 收尾、删除不完整的输出
+文件，然后以 `130` 退出。这样脚本与上层调用方不会把「被取消」误判成
+「压制成功」，也不会残留一个残缺的 mp4 挡住下次运行。
+
 ## 布局说明
 
 弹幕渲染区域分为上下两个独立区域：
