@@ -61,7 +61,7 @@ class LayoutStyle:
     gift_spacing: int = 6
     emoji_spacing: int = 4
     font_size: int = 25
-    fade_out_zone: float = 10.0
+    fade_out_zone: float = 10.0  # 淡出区高度；0 = 不淡出（到界即消失）
     bubble_bg_color: tuple[int, int, int, int] = (20, 20, 20, 127)
     username_color: tuple[int, int, int] = (135, 206, 250)
     text_color: tuple[int, int, int] = (255, 255, 255)

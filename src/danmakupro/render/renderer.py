@@ -53,13 +53,17 @@ class DanmakuRenderer:
             active_text: 当前活跃的文本弹幕列表
             active_gift: 当前活跃的礼物弹幕列表
             layout_params: 布局参数
-            fade_out_zone: 淡出区域高度（像素）
+            fade_out_zone: 淡出区域高度（像素）。``<= 0`` 表示**关闭淡出**：
+                弹幕保持全不透明，直到完全飞出 ``text_top`` 才消失（硬切）。
         """
         layer_y = self._layer_params.layer_y
         self.canvas.fill(Qt.GlobalColor.transparent)  # 清空画布
 
         limit = layout_params.text_top
-        threshold = layout_params.text_top + fade_out_zone
+        # zone = 0 时淡出区高度为 0，下面的 alpha 公式会除零；负数在配置层
+        # 已被 _assert_non_negative 拦下，但本方法是公开入口，一并按 0 兜底。
+        zone = max(0.0, fade_out_zone)
+        threshold = limit + zone
 
         for dm in active_text:
             cy = dm.current_y
@@ -67,8 +71,9 @@ class DanmakuRenderer:
             if cy < threshold:
                 if cy + dm.height <= limit:
                     continue
-                alpha = (cy - limit) / fade_out_zone
-                alpha = max(0.0, min(1.0, alpha))
+                if zone > 0:
+                    alpha = (cy - limit) / zone
+                    alpha = max(0.0, min(1.0, alpha))
             self.painter.setOpacity(alpha)
             local_x = dm.x - self._layer_params.layer_x
             local_y = int(dm.current_y) - layer_y

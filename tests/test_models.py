@@ -370,6 +370,14 @@ class TestLayoutStyleValidation:
         assert isinstance(style.bubble_bg_color, tuple)
         assert style.bubble_bg_color == (20, 20, 20, 127)
 
+    def test_zero_fade_out_zone_is_allowed(self):
+        """0 是合法值，语义 = 关闭淡出（renderer 按硬切处理，不再除零）。"""
+        assert LayoutStyle(fade_out_zone=0).fade_out_zone == 0
+
+    def test_negative_fade_out_zone_raises(self):
+        with pytest.raises(ValueError, match="不能为负数"):
+            LayoutStyle(fade_out_zone=-1)
+
 
 class TestLayoutRatioValidation:
     def test_negative_rows_raises(self):

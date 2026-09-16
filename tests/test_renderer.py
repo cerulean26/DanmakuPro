@@ -2,11 +2,13 @@
 
 测试 DanmakuRenderer 的初始化、帧渲染（含淡出）、帧数据获取和资源释放。
 
-注意：渲染器使用真实的 QPainter，因此不直接验证 setOpacity 的调用参数。
-淡出逻辑通过 render 方法是否被调用来间接验证。
+注意：渲染器使用真实的 QPainter。淡出逻辑既通过 render 方法是否被调用来
+间接验证，也在需要精确核对透明度时对 painter 实例打桩，直接断言
+setOpacity 收到的 alpha（`patch.object(renderer.painter, "setOpacity")`）。
 """
 
-from unittest.mock import MagicMock
+import contextlib
+from unittest.mock import MagicMock, call, patch
 
 from PySide6.QtGui import QImage
 
@@ -17,6 +19,22 @@ from danmakupro.layout.params import LayoutParams, LayerParams
 # =============================================================================
 # 测试辅助
 # =============================================================================
+
+
+@contextlib.contextmanager
+def _renderer(layer_params: LayerParams):
+    """渲染器上下文：无论断言是否失败都保证调用 end()。
+
+    不是洁癖：若 render_frame 抛异常而 end() 未被调用，QPainter 会带着活跃
+    状态与画布一起被回收，整个 pytest 进程直接 ACCESS_VIOLATION
+    （实测 exit=3221225477），只剩「进程崩了」、看不到是哪条用例挂的。
+    产品路径有 finally 兜底（core/pipeline.py:165-167），测试需自己保证。
+    """
+    renderer = DanmakuRenderer(layer_params)
+    try:
+        yield renderer
+    finally:
+        renderer.end()
 
 
 def _layer_params(
@@ -176,6 +194,64 @@ class TestRenderFrame:
 
         dm.render.assert_called_once()
         renderer.end()
+
+    def test_opacity_ramps_inside_fade_zone(self):
+        """淡出区内透明度线性递减：cy=625、limit=600、zone=50 → alpha=0.5。"""
+        layout = _layout_params(text_top=600)
+        dm = _make_stub_dm(current_y=625.0, height=50, x=20)
+
+        with _renderer(_layer_params(800, 600)) as renderer:
+            with patch.object(renderer.painter, "setOpacity") as set_opacity:
+                renderer.render_frame([dm], [], layout, fade_out_zone=50.0)
+
+        assert set_opacity.call_args_list == [call(0.5)]
+
+    def test_zero_fade_zone_keeps_text_opaque(self):
+        """fade_out_zone=0 = 关闭淡出：部分越界的弹幕仍全不透明。
+
+        这是回归用例 —— 修复前该输入会走 `(cy - limit) / 0` 直接抛
+        ZeroDivisionError（配置层放行 0，用户按「淡出区高度 0」的字面语义
+        填 0 就会在压制中途崩溃）。
+        """
+        layout = _layout_params(text_top=600)
+        dm = _make_stub_dm(current_y=580.0, height=50, x=20)
+        # cy=580 < limit=600，cy+height=630 > limit → 部分越界，会走 alpha 公式
+
+        with _renderer(_layer_params(800, 600)) as renderer:
+            with patch.object(renderer.painter, "setOpacity") as set_opacity:
+                renderer.render_frame([dm], [], layout, fade_out_zone=0.0)
+
+        dm.render.assert_called_once()
+        assert set_opacity.call_args_list == [call(1.0)]
+
+    def test_zero_fade_zone_still_skips_fully_out_of_bounds(self):
+        """关闭淡出只影响透明度，不影响「完全越界即跳过」的裁剪。"""
+        layout = _layout_params(text_top=600)
+        dm = _make_stub_dm(current_y=500.0, height=50, x=20)
+        # cy + height = 550 <= limit → 完全越界
+
+        with _renderer(_layer_params(800, 600)) as renderer:
+            renderer.render_frame([dm], [], layout, fade_out_zone=0.0)
+
+        dm.render.assert_not_called()
+
+    def test_negative_fade_zone_treated_as_disabled(self):
+        """负数按 0 处理（配置层已拦，但 render_frame 是公开入口）。
+
+        取材针对 zone<0 与 zone=0 的**唯一可观测差异**：若不做 clamp，
+        threshold 会落到 text_top 之下，完全越界的弹幕反而漏过裁剪被画出来。
+        """
+        layout = _layout_params(text_top=600)
+        partial = _make_stub_dm(current_y=580.0, height=50, x=20)  # 部分越界
+        above = _make_stub_dm(current_y=550.0, height=50, x=20)  # 完全越界
+
+        with _renderer(_layer_params(800, 600)) as renderer:
+            with patch.object(renderer.painter, "setOpacity") as set_opacity:
+                renderer.render_frame([partial, above], [], layout, fade_out_zone=-60.0)
+
+        partial.render.assert_called_once()
+        assert set_opacity.call_args_list == [call(1.0)]
+        above.render.assert_not_called()
 
     def test_text_above_threshold_rendered(self):
         """文本弹幕在 threshold 以上时，应正常渲染。"""
