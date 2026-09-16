@@ -308,8 +308,9 @@ class FFmpegManager:
             duration: 视频总时长（秒）
 
         Returns:
-            各采样段的局部帧率。无法采样或样本不足时返回空列表，
-            调用方据此按「无法判定」处理而不是误报 VFR。
+            各采样段的局部帧率。pts 非单调（段内含 B 帧）的段会被丢弃 ——
+            -read_intervals 按 dts 截断会把局部帧率抬高；无法采样、样本不足
+            或有效段不足时返回空列表，调用方据此按「无法判定」处理而不是误报。
         """
         # 短片没必要采样：三段加起来就接近全片，且 seek 误差占比过高。
         if duration < self._VFR_SAMPLE_SECONDS * 3:
@@ -356,11 +357,75 @@ class FFmpegManager:
                     continue
             if len(pts) < 2:
                 return []
-            span = pts[-1] - pts[0]
-            if span <= 0:
-                return []
-            rates.append((len(pts) - 1) / span)
+            # ffprobe 按解码顺序（dts）输出，段内含 B 帧时 pts 非单调；
+            # -read_intervals 又按 dts 截断，于是 pts 跨度被压缩、局部帧率被
+            # 抬高（实测 source/2026-09-13 17-08-22-543 段 0：101 帧只跨
+            # 4.902s → 20.400，而同一文件中段是精确 20.000）。这是测量伪影
+            # 而非真实波动，丢弃该段。
+            #
+            # 不要改用 max-min 来「修」：实测它与 pts[-1]-pts[0] 结果完全
+            # 相同（同上例两法都是 20.3998），症结在截断不在排序。
+            # 丢弃后若有效段不足两段，_detect_vfr 按「无法判定」处理，不误报。
+            if not all(b > a for a, b in zip(pts, pts[1:])):
+                continue
+            # 单调递增已保证 pts[-1] > pts[0]，无需再设 span <= 0 的兜底。
+            rates.append((len(pts) - 1) / (pts[-1] - pts[0]))
         return rates
+
+    def _probe_packet_count(self, timeout: float) -> int | None:
+        """用 -count_packets 探测视频流的包数，作为真实帧数的低成本来源。
+
+        `nb_frames` 在 FLV 上恒缺失（实测 source/ 下 7/7），此时 frames 只能
+        按标称帧率推算；而推算值与标称同源，`frames / duration` 必然约掉标称，
+        帧率口径修正退化成消除 int() 取整误差。本方法补上真实帧数。
+
+        成本实测：0.17~0.99s（7 个 FLV + 3 个 MP4）。对照 `-count_frames`，
+        23.6s 素材要 2.8s、1212s 素材要 165.7s（比压制本身还慢），不可用。
+
+        准确性实测：包数在 FLV 与 MP4 上均等于真实帧数 —— 1-弹幕版.mp4 与
+        nb_frames 同为 6802、5-弹幕版.mp4 同为 7960、17-07-58-404.flv 与
+        -count_frames 同为 474。
+
+        Args:
+            timeout: 子进程超时（秒）
+
+        Returns:
+            包数；探测失败、字段缺失或结果非正时返回 None，调用方据此回落到
+            标称推算。「宁可不修正，也不要用错的值」。
+        """
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=nb_read_packets",
+            "-of",
+            "json",
+            self.video_in,
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+            )
+            data = json.loads(result.stdout)
+            count = int(data["streams"][0]["nb_read_packets"])
+        except (
+            subprocess.SubprocessError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+        ):
+            return None
+        return count if count > 0 else None
 
     def get_video_info(self) -> dict[str, int | float | bool]:
         """获取视频元数据。
@@ -368,9 +433,10 @@ class FFmpegManager:
         Returns:
             w / h / fps / frames 四个基本字段，外加 vfr 标记。
 
-            fps 是**渲染用**帧率，可能不等于 r_frame_rate：当 nb_frames 与
-            duration 可用时取 frames / duration，以保证弹幕时间轴长度等于
-            视频真实时长（详见 _resolve_render_fps）。
+            fps 是**渲染用**帧率，可能不等于 r_frame_rate：当帧数与 duration
+            可用时取 frames / duration，以保证弹幕时间轴长度等于视频真实时长
+            （详见 _resolve_render_fps）。帧数优先取 nb_frames，缺失时用
+            -count_packets 实测（见 _probe_packet_count），再不行才按标称推算。
 
             vfr 为 True 表示采样发现全片帧率不恒定。弹幕时间轴已按真实平均
             帧率对齐，不会漂移，但画面帧率波动时弹幕运动会略有顿挫。
@@ -417,7 +483,13 @@ class FFmpegManager:
             duration = 0.0
 
         if frames == 0:
-            frames = int(duration * nominal_fps)
+            # nb_frames 缺失（FLV 恒如此）时先探真实包数；探不到再按标称推算 ——
+            # 此时 frames 与标称同源，_resolve_render_fps 里的比值必然约掉，
+            # 等于放弃修正，故这里是「有真实值就用」的最后一道防线。
+            probed = self._probe_packet_count(
+                max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
+            )
+            frames = probed if probed is not None else int(duration * nominal_fps)
 
         fps = FFmpegManager._resolve_render_fps(nominal_fps, frames, duration)
         if (

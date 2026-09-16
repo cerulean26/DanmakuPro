@@ -529,6 +529,83 @@ class TestGetVideoInfo:
         assert info["fps"] == 25.0
         assert info["vfr"] is False  # duration 未知时不该报 VFR
 
+    def test_missing_nb_frames_uses_packet_count(self, ffmpeg_mgr):
+        """nb_frames 缺失（FLV 恒如此）时改用 -count_packets 的实测帧数。
+
+        若沿用标称推算，frames 与标称同源、二者之比必然约掉，帧率口径修正
+        会退化成只消除 int() 取整误差 —— 标称明显偏离真实均值的素材修不出来。
+        """
+        side = [
+            MagicMock(
+                stdout='{"streams":[{"width":640,"height":360,'
+                '"r_frame_rate":"25/1","nb_frames":null}],'
+                '"format":{"duration":"4.0"}}'
+            ),
+            MagicMock(stdout='{"streams":[{"nb_read_packets":"97"}]}'),
+        ]
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", side_effect=side):
+                info = ffmpeg_mgr.get_video_info()
+        assert info["frames"] == 97  # 不是 int(4.0 × 25) = 100
+        assert info["fps"] == pytest.approx(24.25)  # 97 / 4.0
+
+    def test_packet_count_unavailable_falls_back_to_estimate(self, ffmpeg_mgr):
+        """包数探不到时回落到标称推算，且不能因此让整次探测失败。"""
+        side = [
+            MagicMock(
+                stdout='{"streams":[{"width":640,"height":360,'
+                '"r_frame_rate":"25/1","nb_frames":null}],'
+                '"format":{"duration":"4.0"}}'
+            ),
+            MagicMock(stdout='{"streams":[{}]}'),
+        ]
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", side_effect=side):
+                info = ffmpeg_mgr.get_video_info()
+        assert info["frames"] == 100
+        assert info["fps"] == 25.0
+
+
+class TestProbePacketCount:
+    """-count_packets 是真实帧数的低成本来源，探测失败必须安静回落。"""
+
+    def test_returns_packet_count(self, ffmpeg_mgr):
+        payload = '{"streams":[{"nb_read_packets":"474"}]}'
+        with patch("subprocess.run", return_value=MagicMock(stdout=payload)):
+            assert ffmpeg_mgr._probe_packet_count(10.0) == 474
+
+    def test_uses_count_packets_not_count_frames(self, ffmpeg_mgr):
+        """必须用 -count_packets。
+
+        -count_frames 在长素材上比压制本身还慢（实测 1212s 素材 165.7s），
+        而 -count_packets 只要 0.53s，两者结果一致。
+        """
+        payload = '{"streams":[{"nb_read_packets":"1"}]}'
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=payload)
+            ffmpeg_mgr._probe_packet_count(10.0)
+        cmd = mock_run.call_args[0][0]
+        assert "-count_packets" in cmd
+        assert "-count_frames" not in cmd
+
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            '{"streams":[{}]}',  # 字段缺失
+            '{"streams":[]}',  # streams 为空
+            "not json",  # JSON 畸形
+            '{"streams":[{"nb_read_packets":"0"}]}',  # 非正
+            '{"streams":[{"nb_read_packets":"abc"}]}',  # 无法转 int
+        ],
+    )
+    def test_returns_none_on_bad_payload(self, ffmpeg_mgr, stdout):
+        with patch("subprocess.run", return_value=MagicMock(stdout=stdout)):
+            assert ffmpeg_mgr._probe_packet_count(10.0) is None
+
+    def test_returns_none_on_process_failure(self, ffmpeg_mgr):
+        with patch("subprocess.run", side_effect=OSError):
+            assert ffmpeg_mgr._probe_packet_count(10.0) is None
+
 
 # =============================================================================
 # 帧率口径与 VFR 判定
@@ -657,9 +734,34 @@ class TestSampleLocalFrameRates:
         assert len(rates) == 3
         assert all(r == pytest.approx(10.0) for r in rates)
 
-    def test_returns_empty_when_span_is_zero(self, ffmpeg_mgr):
-        """所有 pts 相同 → span=0；不提前返回的话 (n-1)/0 会算出 inf，
-        一个无穷大的局部帧率会污染后面的极差判定。"""
+    def test_drops_non_monotonic_segment(self, ffmpeg_mgr):
+        """段内含 B 帧时 pts 非单调，该段必须丢弃而不是参与极差计算。
+
+        实测 source/2026-09-13 17-08-22-543 段 0 即此情形：101 帧只跨 4.902s
+        → 20.400（同一文件中段是精确 20.000），把三段极差推到 1.999%，距 2%
+        误报阈值只差 0.001%。丢弃该段后极差归零。
+        """
+        bad = (
+            '{"frames":[{"pts_time":"0.0000"},{"pts_time":"4.9040"},'
+            '{"pts_time":"2.2540"}]}'
+        )
+        good = _sample_json(100, 0.05)  # 20fps，单调递增
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(stdout=bad),
+                MagicMock(stdout=good),
+                MagicMock(stdout=good),
+            ]
+            rates = ffmpeg_mgr._sample_local_frame_rates(100.0)
+        assert len(rates) == 2  # 段 0 被丢弃，其余两段保留
+        assert all(r == pytest.approx(20.0, rel=1e-2) for r in rates)
+
+    def test_returns_empty_when_all_pts_not_monotonic(self, ffmpeg_mgr):
+        """所有段都非单调 → 无有效段，按「无法判定」处理而不是误报。
+
+        单调性校验同时挡住了 pts 全相同（span=0）这条路径：非单调即丢弃，
+        不会算出 inf 去污染后面的极差判定。
+        """
         payload = '{"frames":[{"pts_time":"1.0000"},{"pts_time":"1.0000"}]}'
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(stdout=payload)
