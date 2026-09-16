@@ -30,8 +30,11 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check src/ tests/
 
+      # 检查范围由 pyproject.toml 的 [tool.pyright] include 决定（src + tests）。
+      # 这里**不要**再写路径：命令行一旦传路径就会覆盖 include，
+      # 「CI 只查 src/、本地查全项目」两套口径会立刻分叉。
       - name: Run pyright
-        run: uv run pyright src/
+        run: uv run pyright
 
   test:
     name: Test (Windows)

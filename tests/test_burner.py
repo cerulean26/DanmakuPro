@@ -1,6 +1,7 @@
 """DanmakuBurner 单元测试"""
 
 from contextlib import contextmanager
+from typing import cast
 from unittest.mock import patch, MagicMock
 import sys
 
@@ -88,7 +89,7 @@ def _make_run_burner(mock_deps, tmp_path):
     encoder.get_video_info.return_value = _mk_vinfo()
     encoder.build_command.return_value = ["ffmpeg", "..."]
     burner._frame_encoder = encoder
-    burner._asset_provider.load_assets.return_value = _mk_resource()
+    cast(MagicMock, burner._asset_provider).load_assets.return_value = _mk_resource()
     return burner, out
 
 
@@ -617,7 +618,7 @@ def make_check_burner(mock_deps, tmp_path):
         encoder.get_video_info.return_value = v_info
         encoder.active_pipeline = pipeline
         burner._frame_encoder = encoder
-        burner._asset_provider.load_assets.return_value = resource
+        cast(MagicMock, burner._asset_provider).load_assets.return_value = resource
         return burner
 
     return _build

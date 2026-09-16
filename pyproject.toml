@@ -24,6 +24,10 @@ typeCheckingMode = "basic"
 # 会为每行 import 报 "Import could not be resolved"。
 venvPath = "."
 venv = ".venv"
+# 检查范围只在此处定义一处：CI 与本地都跑**无参数**的 `pyright`，集合由本字段决定。
+# 早先 CI 写的是 `pyright src/`（命令行传路径会覆盖 include），于是本地跑
+# 无参数 pyright 会把 tests/ 一并检查、报出 CI 从不报的错误，两套口径互相打架。
+include = ["src", "tests"]
 
 [build-system]
 requires = ["hatchling"]
@@ -65,24 +69,24 @@ markers = [
 # 覆盖率阈值统一在此处定义，命令行不要再传 --cov-fail-under，
 # 否则两处阈值会不一致、且本地跑 pytest 时不起作用。
 #
-# 以下数字均为 2026-09-16 实测：
-#   pytest tests/ -m "not gpu"（含 slow）→ 411 passed，
-#     总体 97.18%（1629 条语句 / 46 条未覆盖）
-#   pytest tests/ -m "not gpu and not slow"（CI 同口径）→ 总体 97.05%
-#     （48 条未覆盖；多出的 2 条由 slow 的 e2e 用例覆盖）
-#   28 个模块中 23 个满覆盖，主要大模块全部在内：encode/ffmpeg.py(278)、
+# 以下数字均为 2026-09-16 实测（含该日的 VFR 帧率与 fade_out_zone 两处修复）：
+#   pytest tests/ -m "not gpu"（含 slow）→ 432 passed，
+#     总体 97.20%（1644 条语句 / 46 条未覆盖）
+#   pytest tests/ -m "not gpu and not slow"（CI 同口径）→ 428 passed / 4 deselected，
+#     总体 97.08%（48 条未覆盖；多出的 2 条由 slow 的 e2e 用例覆盖）
+#   28 个模块中 23 个满覆盖，主要大模块全部在内：encode/ffmpeg.py(287)、
 #     core/burner.py(195)、layout/engine.py(151)、config/models.py(115)、
-#     cli.py(78)、utils/validation.py(75)、errors.py(70)、config/loader.py(64)、
+#     cli.py(78)、utils/validation.py(77)、errors.py(70)、config/loader.py(64)、
 #     core/pipeline.py(61)、input/parser.py(37)
 #   剩余薄弱点（5 个）：render/assets.py 81%(21/111)、
-#     render/layout_builder.py 92%(15/189)、logger_config.py 83%(4/24)、
+#     render/layout_builder.py 91%(17/189)、logger_config.py 85%(4/26)、
 #     __init__.py 64%(5/14)、utils/helpers.py 92%(1/12)
 #
-# fail_under = 85 的实际余量：未覆盖语句还可再增加 198 条（46 -> 244）才报警。
+# fail_under = 85 的实际余量：未覆盖语句还可再增加 198 条（48 -> 246）才报警。
 # 余量偏大 —— 只有大模块整块失守才可能触发报警：encode/ffmpeg.py 全失守会降到
-# 80.11%，而 render/assets.py 全失守仍有 90.36%、render/layout_builder.py
-# 全失守仍有 85.57%，两者都不报警。
-# 建议在确认后提到 90（余量 116 条，日常迭代仍安全）或 95（余量 35 条，偏严格）。
+# 79.62%，而 render/assets.py 全失守仍有 91.61%、render/layout_builder.py
+# 全失守仍有 86.62%，两者都不报警。
+# 建议在确认后提到 90（余量 116 条，日常迭代仍安全）或 95（余量 34 条，偏严格）。
 # 阈值调整属质量门禁变更，未经确认前保持 85。
 [tool.coverage.report]
 fail_under = 85
