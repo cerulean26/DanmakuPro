@@ -21,6 +21,16 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 
 配置文件属用户私有产物：仓库与安装包都**不携带**会被自动加载的 `danmakupro.yaml`，只提供模板 `src/danmakupro/danmakupro.example.yaml`。这样某台机器上的临时调参不会被误提交，也就不会静默改变他人的运行结果。模板与内置默认值的逐字段一致性由测试断言。
 
+## 环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `DANMAKUPRO_LOG_DIR` | 指定日志目录，优先级最高 |
+
+不设该变量时，日志目录按运行形态自动选择：源码检出写到**仓库根**的 `logs/`；wheel / pip 安装后写到**用户级目录**（Windows `%LOCALAPPDATA%\DanmakuPro\logs`，其它平台 `$XDG_STATE_HOME/DanmakuPro/logs`，未设置时回落 `~/.local/state`）。
+
+> 早期实现一律按 `Path(__file__)` 往上数三级猜「项目根」。这在 src 布局的源码检出里恰好成立，但安装后代码在 `site-packages` 下，同样三级得到的是 Python 自己的 `Lib\` —— 日志既看不见，系统级安装时还会因无写权限在启动第一步就 `PermissionError`。
+
 ## 参数表
 
 下表列出所有可配置字段及其默认值（40 项，5 个分组）。
