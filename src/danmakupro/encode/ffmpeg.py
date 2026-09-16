@@ -32,6 +32,17 @@ _PIPELINE_LABELS: dict[str, str] = {
     EncodeMode.CPU: "CPU (libx264)",
 }
 
+#: 各硬件管线对应的 ffmpeg -hwaccel 方式
+_HWACCEL_METHOD: dict[str, str] = {
+    EncodeMode.GPU: "cuda",
+    EncodeMode.QSV: "qsv",
+}
+
+#: ffmpeg -decoders 的行形如「V..... vp9_cuvid    Nvidia ... (codec vp9)」，
+#: 行尾括号里的 codec 名与 ffprobe 的 codec_name 同源，可直接对齐，不必
+#: 另维护一张「编码 → 解码器」的映射表。
+_DECODER_LINE_RE = re.compile(r"^\s*V.{5}\s+(\S+)\s+.*\(codec (\S+)\)\s*$")
+
 
 class FFmpegManager:
     """FFmpeg 进程管理器"""
@@ -79,6 +90,9 @@ class FFmpegManager:
         #: 这样「只构造不使用」的场景（GUI 建好对象后用户取消、单测只断言
         #: 构造参数）不必白付探测代价。取值请走 active_pipeline 属性。
         self._active_pipeline: str | None = None
+        #: 输入视频的编码格式（ffprobe 的 codec_name）。硬解判据要用，实则为
+        #: 惰性值 —— 见 probe_input_codec 与 get_video_info 的回填。
+        self._input_codec: str | None = None
 
     @property
     def current_speed(self) -> float:
@@ -132,7 +146,11 @@ class FFmpegManager:
             )
 
         timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
-        resolved = _probe_encode_pipeline(str(self.encode_mode), ffmpeg_exe, timeout)
+        # CPU 管线用不上输入编码，不必付一遍 ffprobe 的代价
+        codec = None if self.encode_mode == EncodeMode.CPU else self.probe_input_codec()
+        resolved = _probe_encode_pipeline(
+            str(self.encode_mode), ffmpeg_exe, timeout, codec
+        )
         self._active_pipeline = resolved
 
         label = _PIPELINE_LABELS[resolved]
@@ -149,6 +167,23 @@ class FFmpegManager:
         否则进程内会一直复用首次探测的结果。测试中亦用于保证用例隔离。
         """
         _probe_encode_pipeline.cache_clear()
+        _hardware_decodable_codecs.cache_clear()
+        _probe_input_codec.cache_clear()
+
+    def probe_input_codec(self) -> str | None:
+        """探测输入视频的编码格式（ffprobe 的 codec_name），失败返回 None。
+
+        结果在实例与进程两级缓存：同一份输入的硬解判据不会被反复起子进程，
+        get_video_info() 也会顺手回填这份缓存。
+        """
+        if self._input_codec is not None:
+            return self._input_codec
+        codec = _probe_input_codec(
+            self.video_in,
+            max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout),
+        )
+        self._input_codec = codec or None
+        return self._input_codec
 
     @staticmethod
     def _check_nvenc_available(
@@ -454,7 +489,7 @@ class FFmpegManager:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate,nb_frames:format=duration",
+            "stream=width,height,r_frame_rate,nb_frames,codec_name:format=duration",
             "-of",
             "json",
             self.video_in,
@@ -468,6 +503,9 @@ class FFmpegManager:
         )
         data = json.loads(result.stdout)
         info = data["streams"][0]
+        # 顺手回填编码格式：硬解判据与 get_video_info 都要它，顺便宜撮合一处，
+        # 免得同一次压制为同一份输入起两遍 ffprobe。
+        self._input_codec = str(info.get("codec_name") or "") or None
         nominal_fps = FFmpegManager._parse_frame_rate(info.get("r_frame_rate"))
 
         # nb_frames 在 flv/mp4 上可能缺失或为 "N/A"，不能无条件 int()。
@@ -523,6 +561,12 @@ class FFmpegManager:
     def _build_gpu_command(
         self, fps: float, w: int, h: int, lp: LayerParams
     ) -> list[str]:
+        # 不写死 -c:v <输入编码>_cuvid，交给 ffmpeg 依据 -hwaccel cuda 自选
+        # 解码器：写死时非 H.264 输入会在绑定 scale_cuda 前就失败（HEVC 实测
+        # rc=3199971767）。实测去掉后 h264/hevc/vp9/mpeg4 均走通且日志仍是
+        # pixfmt:cuda（真硬解，非软解后回拷）；filtergraph 需要 GPU 帧的部分
+        # 由 ffmpeg 自己保证，不可硬解的编码在 _probe_encode_pipeline 里
+        # 已提前判掉并落到 CPU 管线。
         return [
             "ffmpeg",
             "-y",
@@ -530,8 +574,6 @@ class FFmpegManager:
             "cuda",
             "-hwaccel_output_format",
             "cuda",
-            "-c:v",
-            "h264_cuvid",
             "-i",
             self.video_in,
             "-f",
@@ -571,6 +613,8 @@ class FFmpegManager:
     def _build_qsv_command(
         self, fps: float, w: int, h: int, lp: LayerParams
     ) -> list[str]:
+        # 同样不指定输入解码器，理由见 _build_gpu_command。本机 QSV 无
+        # mpeg4 硬解（无 mpeg4_qsv），这类输入靠开跑前的判据落到 CPU。
         return [
             "ffmpeg",
             "-y",
@@ -578,8 +622,6 @@ class FFmpegManager:
             "qsv",
             "-hwaccel_output_format",
             "qsv",
-            "-c:v",
-            "h264_qsv",
             "-i",
             self.video_in,
             "-f",
@@ -798,17 +840,114 @@ class FFmpegManager:
 
 
 @functools.lru_cache(maxsize=None)
-def _probe_encode_pipeline(encode_mode: str, ffmpeg_exe: str, timeout: int) -> str:
+def _probe_input_codec(video_in: str, timeout: int) -> str | None:
+    """输入视频的编码格式（ffprobe codec_name），探测失败返回 None。"""
+    if shutil.which("ffprobe") is None:
+        return None
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-of",
+        "default=nw=1:nk=1",
+        video_in,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+        name = result.stdout.strip().splitlines()[0].strip()
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        ValueError,
+        IndexError,
+    ):
+        return None
+    return name or None
+
+
+@functools.lru_cache(maxsize=None)
+def _hardware_decodable_codecs(
+    hwaccel: str, ffmpeg_exe: str, timeout: int
+) -> frozenset[str] | None:
+    """该 ffmpeg 构建里能用 hwaccel 硬解的编码集合，探测失败返回 None。
+
+    `*_cuvid` / `*_qsv` 就是 NVDEC / Quick Sync 的硬解实现所在，行尾括号里的
+    codec 名可直接与 ffprobe 的 codec_name 对齐，故不必写死「编码 → 解码器」
+    映射 —— 换一台机器、换一份 ffmpeg，支持的集合随之变化。
+    """
+    suffix = {"cuda": "_cuvid", "qsv": "_qsv"}.get(hwaccel)
+    if suffix is None:
+        return None
+    try:
+        result = subprocess.run(
+            [ffmpeg_exe, "-hide_banner", "-decoders"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+    except (subprocess.SubprocessError, OSError, TypeError):
+        return None
+
+    codecs = set()
+    for line in result.stdout.splitlines():
+        matched = _DECODER_LINE_RE.match(line)
+        if matched and matched.group(1).endswith(suffix):
+            codecs.add(matched.group(2))
+    return frozenset(codecs)
+
+
+def _can_hw_decode(
+    pipeline: str, ffmpeg_exe: str, timeout: int, input_codec: str | None
+) -> bool:
+    """硬件管线能否硬解这份输入（只关乎解码，无关后续的 NVENC 编码）。
+
+    不可硬解时 ffmpeg 会在绑定 scale_cuda / hwdownload 前就退出，压制是**必然**
+    失败的，所以必须开跑前判掉，而不是等压到一半报 rc=3199971767。
+
+    两种情况按「可以」处理：输入编码未知（ffprobe 探不到，此时后续
+    get_video_info 会给出真正的错误，不该白白丢掉加速）；硬解清单探测失败
+    （宁可不降级，也不该把能走 GPU 的任务一律拖到 CPU）。
+    """
+    if input_codec is None:
+        return True
+    supported = _hardware_decodable_codecs(
+        _HWACCEL_METHOD[pipeline], ffmpeg_exe, timeout
+    )
+    if supported is None:
+        return True
+    return input_codec in supported
+
+
+@functools.lru_cache(maxsize=None)
+def _probe_encode_pipeline(
+    encode_mode: str,
+    ffmpeg_exe: str,
+    timeout: int,
+    input_codec: str | None = None,
+) -> str:
     """探测实际可用的编码管线（带进程级缓存）。
 
     编码器探测要启动 2~4 个 ffmpeg 子进程，实测耗时 auto 1.03s / gpu 1.45s /
-    qsv 2.63s（cpu 无需探测，0.04s）。结果只取决于 ffmpeg 安装与硬件，
-    因此在一个进程内缓存即可 —— 否则每次构造 FFmpegManager 都要重付一遍。
+    qsv 2.63s（cpu 无需探测，0.04s）。结果只取决于 ffmpeg 安装、硬件与输入
+    编码，因此在一个进程内缓存即可 —— 否则每次构造 FFmpegManager 都要重付一遍。
 
     Args:
         encode_mode: 用户请求的编码模式
         ffmpeg_exe: ffmpeg 可执行文件路径（参与缓存 key，换 ffmpeg 即失效）
         timeout: 单次探测子进程的超时秒数
+        input_codec: 输入视频的编码格式。GPU / QSV 无法硬解该编码时**回落到
+            CPU**（并给出 WARNING），因为此时压制必然失败
 
     Returns:
         EncodeMode 中实际可用的管线
@@ -822,16 +961,34 @@ def _probe_encode_pipeline(encode_mode: str, ffmpeg_exe: str, timeout: int) -> s
     if encode_mode == EncodeMode.GPU:
         if not FFmpegManager._check_nvenc_available(timeout):
             raise RuntimeError("未检测到 NVENC 编码器")
+        if not _can_hw_decode(EncodeMode.GPU, ffmpeg_exe, timeout, input_codec):
+            _warn_hw_downgrade(EncodeMode.GPU, input_codec)
+            return EncodeMode.CPU
         return EncodeMode.GPU
 
     if encode_mode == EncodeMode.QSV:
         if not FFmpegManager._check_qsv_available(timeout):
             raise RuntimeError("未检测到 QSV 编码器")
+        if not _can_hw_decode(EncodeMode.QSV, ffmpeg_exe, timeout, input_codec):
+            _warn_hw_downgrade(EncodeMode.QSV, input_codec)
+            return EncodeMode.CPU
         return EncodeMode.QSV
 
-    # AUTO：优先 NVENC，其次 QSV，最后回退 CPU
-    if FFmpegManager._check_nvenc_available(timeout):
-        return EncodeMode.GPU
-    if FFmpegManager._check_qsv_available(timeout):
-        return EncodeMode.QSV
+    # AUTO：优先生效的第一个可用管线（NVENC > QSV），都不可用才走 CPU
+    for pipeline, checker in (
+        (EncodeMode.GPU, FFmpegManager._check_nvenc_available),
+        (EncodeMode.QSV, FFmpegManager._check_qsv_available),
+    ):
+        if not checker(timeout):
+            continue
+        if _can_hw_decode(pipeline, ffmpeg_exe, timeout, input_codec):
+            return pipeline
+        _warn_hw_downgrade(pipeline, input_codec)
     return EncodeMode.CPU
+
+
+def _warn_hw_downgrade(pipeline: str, input_codec: str | None) -> None:
+    logger.warning(
+        f"输入编码 {input_codec} 无 {_PIPELINE_LABELS[pipeline]} 硬解，"
+        "本次改用 CPU 管线压制（画面与参数设置不变，仅速度较慢）"
+    )

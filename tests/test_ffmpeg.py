@@ -7,7 +7,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from danmakupro.encode.ffmpeg import FFmpegManager, _probe_encode_pipeline
+from danmakupro.encode.ffmpeg import (
+    FFmpegManager,
+    _hardware_decodable_codecs,
+    _probe_encode_pipeline,
+    _probe_input_codec,
+)
 from danmakupro.config.models import (
     EncodeMode,
     SystemParams,
@@ -55,17 +60,38 @@ def ffmpeg_mgr():
 # =============================================================================
 
 
-def _bare_mgr(mode):
-    """构造一个绕过 __init__ 的管理器，只填 _resolve_encode_mode 需要的属性。"""
+def _bare_mgr(mode, codec="h264"):
+    """构造一个绕过 __init__ 的管理器，只填 _resolve_encode_mode 需要的属性。
+
+    codec 默认为常见的 H.264（各硬件都能硬解），想测「不可硬解 → 回退」
+    把它传成本机不支持的值即可。
+    """
     mgr = FFmpegManager.__new__(FFmpegManager)
     mgr.encode_mode = mode
+    mgr.video_in = "test.mp4"
     mgr.encode_params = DEFAULT_CONFIG.encode
     mgr.system_params = DEFAULT_CONFIG.system
     mgr._active_pipeline = None
+    mgr._input_codec = codec
     return mgr
 
 
+@pytest.fixture
+def _hw_decoders():
+    """避开真实的 `ffmpeg -decoders`：这里只测管线选择，不测本机硬件。
+
+    集合写成 {h264}，与 _bare_mgr 的默认编码配套。
+    """
+    with patch(
+        "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
+        return_value=frozenset({"h264"}),
+    ):
+        yield
+
+
 class TestResolveEncodeMode:
+    pytestmark = pytest.mark.usefixtures("_hw_decoders")
+
     def test_ffmpeg_not_found_raises(self):
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
@@ -133,6 +159,135 @@ class TestResolveEncodeMode:
                 mgr = _bare_mgr(EncodeMode.QSV)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.QSV
+
+
+# =============================================================================
+# 硬解判据：不可硬解的输入必须从 GPU / QSV 落到 CPU
+# =============================================================================
+
+#: 仿照 ffmpeg -decoders 的输出（标题行、音频解码器行为干扰项，故意保留）
+_DECODERS_OUTPUT = """\
+Decoders:
+ V..... = Video decoder
+ V..... h264_cuvid           Nvidia CUVID H264 decoder (codec h264)
+ V..... hevc_cuvid           Nvidia CUVID HEVC decoder (codec hevc)
+ V....D vp9_qsv              VP9 video (Intel Quick Sync Video acceleration) (codec vp9)
+ A..... mp3                  MP3 decoder (codec mp3)
+"""
+
+
+class TestHardwareDecodableCodecs:
+    """从 ffmpeg -decoders 反推「这份 ffmpeg 能硬解哪些编码」。
+
+    不写死「编码 → 解码器」映射，是因为可用解码器取决于 ffmpeg 的构建选项：
+    移植性差一层，这里坚持从运行时拿。
+    """
+
+    def test_parses_codecs_by_hwaccel(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_DECODERS_OUTPUT)
+            cuda = _hardware_decodable_codecs("cuda", "/usr/bin/ffmpeg", 5)
+            qsv = _hardware_decodable_codecs("qsv", "/usr/bin/ffmpeg", 5)
+        assert cuda == frozenset({"h264", "hevc"})
+        assert qsv == frozenset({"vp9"})
+
+    def test_probe_failure_returns_none(self):
+        """探测失败要返回 None 而不是空集合 —— 空集合等于「什么都不支持」，
+        会把所有任务一律降级到 CPU；None 才能表达「不知道，别乱降级」。
+        """
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 5)
+        ):
+            assert _hardware_decodable_codecs("cuda", "/usr/bin/ffmpeg", 5) is None
+
+    def test_unsupported_hwaccel_returns_none(self):
+        assert _hardware_decodable_codecs("videotoolbox", "/usr/bin/ffmpeg", 5) is None
+
+
+class TestProbeInputCodec:
+    def test_returns_codec_name(self):
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(stdout="hevc\n")
+                assert _probe_input_codec("in.mp4", 5) == "hevc"
+
+    def test_ffprobe_missing_returns_none(self):
+        with patch("shutil.which", return_value=None):
+            assert _probe_input_codec("in.mp4", 5) is None
+
+    def test_failure_returns_none(self):
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch(
+                "subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "ffprobe"),
+            ):
+                assert _probe_input_codec("in.mp4", 5) is None
+
+
+class TestHwDecodeFallback:
+    """不可硬解必须落到 CPU：GPU 路径对此类输入是**必然失败**，不是慢一点。"""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        FFmpegManager.clear_probe_cache()
+        yield
+        FFmpegManager.clear_probe_cache()
+
+    @pytest.fixture(autouse=True)
+    def _hw(self):
+        """只放行 h264：这里测的是降级规则，不该掺本机真实的硬解清单。"""
+        with patch(
+            "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
+            return_value=frozenset({"h264"}),
+        ):
+            yield
+
+    def _resolve(self, mode, codec, *, nvenc=True, qsv=False):
+        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+            with patch.object(
+                FFmpegManager, "_check_nvenc_available", return_value=nvenc
+            ):
+                with patch.object(
+                    FFmpegManager, "_check_qsv_available", return_value=qsv
+                ):
+                    mgr = _bare_mgr(mode, codec=codec)
+                    mgr._resolve_encode_mode()
+        return mgr.active_pipeline
+
+    def test_gpu_undecodable_falls_back_to_cpu(self):
+        # _hw_decoders 只放行 h264，输入却是 hevc
+        assert self._resolve(EncodeMode.GPU, "hevc") == EncodeMode.CPU
+
+    def test_qsv_undecodable_falls_back_to_cpu(self):
+        assert self._resolve(EncodeMode.QSV, "mpeg4", nvenc=False, qsv=True) == (
+            EncodeMode.CPU
+        )
+
+    def test_decodable_keeps_gpu(self):
+        assert self._resolve(EncodeMode.GPU, "h264") == EncodeMode.GPU
+
+    def test_auto_picks_hardware_that_can_decode(self):
+        """GPU 不可硬解但 QSV 可以时，应当落到 QSV 而不是直接回退 CPU。"""
+        with patch(
+            "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
+            side_effect=lambda hwaccel, _exe, _t: (
+                frozenset({"hevc"}) if hwaccel == "qsv" else frozenset({"h264"})
+            ),
+        ):
+            assert self._resolve(EncodeMode.AUTO, "hevc", qsv=True) == EncodeMode.QSV
+
+    def test_unknown_codec_keeps_requested_pipeline(self):
+        """输入编码探不到时不降级 —— 那会让硬加速平白丢失，真正的错误由
+        后续 get_video_info() 给出。
+        """
+        with patch.object(FFmpegManager, "probe_input_codec", return_value=None):
+            assert self._resolve(EncodeMode.GPU, None) == EncodeMode.GPU
+
+    def test_unknown_support_set_keeps_requested_pipeline(self):
+        with patch(
+            "danmakupro.encode.ffmpeg._hardware_decodable_codecs", return_value=None
+        ):
+            assert self._resolve(EncodeMode.GPU, "hevc") == EncodeMode.GPU
 
 
 # =============================================================================
@@ -205,6 +360,8 @@ class TestLazyProbe:
 
 class TestProbeCache:
     """探测结果必须缓存：重复构造不应重跑 ffmpeg 子进程。"""
+
+    pytestmark = pytest.mark.usefixtures("_hw_decoders")
 
     def test_probe_runs_once_for_repeated_construction(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
@@ -513,6 +670,22 @@ class TestGetVideoInfo:
             with patch("subprocess.run", return_value=mock_result):
                 info = ffmpeg_mgr.get_video_info()
         assert info["frames"] == 100
+
+    def test_codec_name_is_backfilled(self, ffmpeg_mgr):
+        """get_video_info 顺手记下 codec_name，硬解判据不必再起一遍 ffprobe。"""
+        mock_result = MagicMock()
+        mock_result.stdout = (
+            '{"streams":[{"width":640,"height":360,"r_frame_rate":"25/1",'
+            '"nb_frames":100,"codec_name":"hevc"}],'
+            '"format":{"duration":"4.0"}}'
+        )
+        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
+            with patch("subprocess.run", return_value=mock_result) as mock_run:
+                ffmpeg_mgr.get_video_info()
+                run_count = mock_run.call_count
+        assert ffmpeg_mgr._input_codec == "hevc"
+        assert ffmpeg_mgr.probe_input_codec() == "hevc"
+        assert mock_run.call_count == run_count  # 回填后才不会再探
 
     def test_missing_duration_falls_back_to_nominal_fps(self, ffmpeg_mgr):
         """format 段没有 duration：不能崩，fps 回落到标称帧率。"""
@@ -824,6 +997,27 @@ class TestBuildCommand:
         ffmpeg_mgr.active_pipeline = EncodeMode.QSV
         lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
         cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
+        assert "h264_qsv" in cmd
+
+    def test_gpu_command_does_not_force_input_decoder(self, ffmpeg_mgr):
+        """GPU 命令不得在输入侧写死解码器。
+
+        写死 `-c:v h264_cuvid` 时，HEVC / VP9 / MPEG4 输入在绑定 scale_cuda
+        前就失败（本机实测 HEVC rc=3199971767、VP9 与 MPEG4 rc=4294967274），
+        交给 -hwaccel cuda 自选才算得通。输出编码器仍须是 h264_nvenc。
+        """
+        ffmpeg_mgr.active_pipeline = EncodeMode.GPU
+        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
+        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
+        assert "-c:v" not in cmd[: cmd.index("-i")]
+        assert "h264_nvenc" in cmd
+
+    def test_qsv_command_does_not_force_input_decoder(self, ffmpeg_mgr):
+        """同 GPU：输入侧不写死 h264_qsv，输出侧照旧用 h264_qsv 编码。"""
+        ffmpeg_mgr.active_pipeline = EncodeMode.QSV
+        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
+        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
+        assert "-c:v" not in cmd[: cmd.index("-i")]
         assert "h264_qsv" in cmd
 
 

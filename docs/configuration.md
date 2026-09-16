@@ -92,6 +92,19 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 | `cpu_crf` | 23 | libx264 CRF 质量（0~51，越小越好） |
 | `cpu_min_reserve_threads` | 2 | CPU 编码保留线程数 |
 
+#### `--encode` 与硬解回退
+
+| 取值 | 行为 |
+|------|------|
+| `auto` | 依次试 NVENC → QSV，都不行才用 CPU |
+| `gpu` | 只用 NVIDIA NVENC；NVENC 不可用时报错退出 |
+| `qsv` | 只用 Intel QSV；QSV 不可用时报错退出 |
+| `cpu` | 始终用 libx264 |
+
+选中的硬件管线只在**能硬解这份输入**时才真正启用：工具开跑前会用 `ffprobe` 取输入的编码格式，再和本机 `ffmpeg -decoders` 里的 `*_cuvid` / `*_qsv` 对照。没有对应硬解实现时（例如 Intel QSV 对 MPEG-4），它会自动改用 CPU 管线并在日志里给出 WARNING —— 这类输入走硬件是**必然失败**（画面的一部分绑不上 GPU 滤镜），不是慢一点的问题。
+
+> 早期实现在命令里写死 `-c:v h264_cuvid`，等于假定输入永远是 H.264：HEVC 实测 `rc=3199971767`、VP9 与 MPEG-4 `rc=4294967274`。现在交给 ffmpeg 依据 `-hwaccel` 自选解码器，实测 h264 / hevc / vp9 / mpeg4 四种输入均正常，且日志显示走的是 `pixfmt:cuda`（真硬解，不是软解后回拷）。
+
 ### 系统参数 (system)
 
 | 参数 | 默认值 | 说明 |
