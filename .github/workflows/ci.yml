@@ -69,3 +69,26 @@ jobs:
       # 仍须排除 —— runner 没有 NVIDIA GPU）。
       - name: Run pytest
         run: uv run pytest tests/ -m "not gpu and not slow"
+
+  release:
+    name: Build & Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build
+        run: uv build
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
