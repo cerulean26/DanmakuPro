@@ -1,6 +1,6 @@
 [project]
 name = "danmakupro"
-version = "1.0.0"
+dynamic = ["version"]
 description = "抖音直播弹幕压制工具"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -30,8 +30,11 @@ venv = ".venv"
 include = ["src", "tests"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/danmakupro"]
