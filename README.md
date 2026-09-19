@@ -35,6 +35,18 @@ cd DanmakuPro
 uv sync          # 安装依赖（或改用 pip install .）
 ```
 
+> **需要 ffmpeg**
+> 本项目不打包 ffmpeg，请单独安装并将 `ffmpeg` 和 `ffprobe` 加入系统 PATH。
+>
+> | 方式 | 命令 |
+> |------|------|
+> | **winget**（Windows 推荐） | `winget install ffmpeg` |
+> | **scoop** | `scoop install ffmpeg` |
+> | **brew**（macOS） | `brew install ffmpeg` |
+> | **apt**（Debian/Ubuntu） | `sudo apt install ffmpeg` |
+>
+> 安装后验证：`ffmpeg -version`
+
 ## 快速开始
 
 ### 1. 准备素材
