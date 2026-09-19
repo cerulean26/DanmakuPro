@@ -50,8 +50,8 @@ danmakupro source/视频.mp4 source/弹幕.xml --check
 # 压制（默认输出到输入视频旁的 <视频名>-弹幕版.mp4）
 danmakupro source/视频.mp4 source/弹幕.xml
 
-# 指定编码模式与输出路径
-danmakupro source/视频.mp4 source/弹幕.xml --encode gpu -o output.mp4
+# 指定编码模式与输出路径（详见 docs/configuration.md#--encode-与硬解回退）
+danmakupro source/视频.mp4 source/弹幕.xml --encode h264_nvenc -o output.mp4
 
 # 生成带注释的配置模板到当前目录（已存在时不覆盖，加 -f 覆盖）
 danmakupro --init-config
@@ -115,7 +115,7 @@ XML 解析 → 资源加载 → 视频信息获取 → 弹幕布局计算 → �
 2. 加载 Emoji 和礼物图片资源，按需加载字体
 3. 通过 ffprobe 获取视频宽高、帧率、总帧数（与步骤 1-2 并发执行）
 4. 计算布局参数（弹幕行数 / 宽度比例）
-5. 构建 FFmpeg 编码管线（自动检测 GPU / QSV / CPU；探测结果进程内缓存，仅首次耗时）
+5. 构建 FFmpeg 编码管线（自动检测 NVENC / QSV / CPU；探测结果进程内缓存，仅首次耗时）
 6. 逐帧惰性创建并渲染弹幕气泡图层，通过管道送入 FFmpeg，输出压制视频
 
 ## 配置

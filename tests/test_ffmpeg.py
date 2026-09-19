@@ -6,7 +6,6 @@ test_probe.py（视频元数据与帧率口径）、test_commands.py（命令行
 
 import contextlib
 import io
-import subprocess
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -14,7 +13,6 @@ import pytest
 from danmakupro.config.models import EncodeMode, SystemParams, DEFAULT_CONFIG
 from danmakupro.encode.ffmpeg import (
     FFmpegManager,
-    _check_encoder,
     _probe_encode_pipeline,
 )
 
@@ -94,18 +92,14 @@ class TestResolveEncodeMode:
 
     def test_nvenc_mode_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch(
-                "danmakupro.encode.ffmpeg._check_encoder", return_value=True
-            ):
+            with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=True):
                 mgr = _bare_mgr(EncodeMode.H264_NVENC)
                 mgr._resolve_encode_mode()
                 assert mgr.active_pipeline == EncodeMode.H264_NVENC
 
     def test_nvenc_mode_unavailable_raises(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch(
-                "danmakupro.encode.ffmpeg._check_encoder", return_value=False
-            ):
+            with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=False):
                 with pytest.raises(RuntimeError, match="未检测到 NVENC"):
                     _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
 
@@ -142,9 +136,7 @@ class TestHwDecodeFallback:
 
     def _resolve(self, mode, codec):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch(
-                "danmakupro.encode.ffmpeg._check_encoder", return_value=True
-            ):
+            with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=True):
                 mgr = _bare_mgr(mode, codec=codec)
                 mgr._resolve_encode_mode()
         return mgr.active_pipeline
@@ -311,24 +303,18 @@ class TestProbeEncodePipeline:
     """
 
     def test_gpu_unavailable_raises(self):
-        with patch(
-            "danmakupro.encode.ffmpeg._check_encoder", return_value=False
-        ):
+        with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=False):
             with pytest.raises(RuntimeError, match="未检测到 NVENC"):
                 _probe_encode_pipeline(EncodeMode.H264_NVENC, "/usr/bin/ffmpeg", 5)
 
     def test_qsv_unavailable_raises(self):
-        with patch(
-            "danmakupro.encode.ffmpeg._check_encoder", return_value=False
-        ):
+        with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=False):
             with pytest.raises(RuntimeError, match="未检测到 QSV"):
                 _probe_encode_pipeline(EncodeMode.H264_QSV, "/usr/bin/ffmpeg", 5)
 
     def test_cpu_never_probes_encoders(self):
         """CPU 是兜底路径，任何探测都不该发生（否则每次构造白等 1.5s）。"""
-        with patch(
-            "danmakupro.encode.ffmpeg._check_encoder"
-        ) as mock_check:
+        with patch("danmakupro.encode.ffmpeg._check_encoder") as mock_check:
             resolved = _probe_encode_pipeline(
                 EncodeMode.H264,
                 "/usr/bin/ffmpeg",

@@ -63,7 +63,7 @@ def run_probe(
     """
     return subprocess.run(
         cmd,
-        capture_output=True, 
+        capture_output=True,
         text=True,
         check=check,
         timeout=timeout,

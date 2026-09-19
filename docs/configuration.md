@@ -90,21 +90,27 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 | `gpu_cq` | 23 | NVIDIA NVENC CQ 质量（1~51，越小越好） |
 | `qsv_preset` | "medium" | Intel QSV 预设 |
 | `qsv_quality` | 23 | Intel QSV 质量（1~51，越小越好） |
-| `cpu_preset` | "veryfast" | libx264 预设 |
-| `cpu_crf` | 23 | libx264 CRF 质量（0~51，越小越好） |
+| `cpu_preset` | "veryfast" | libx264 / libx265 / libsvtav1 预设 |
+| `cpu_crf` | 23 | CPU 编码 CRF 质量（0~51，越小越好） |
 | `cpu_min_reserve_threads` | 2 | CPU 编码保留线程数 |
 
 #### `--encode` 与硬解回退
 
-| 取值 | 行为 |
-|------|------|
-| `gpu` | NVIDIA NVENC；不可用时报错退出；不能硬解输入则落 CPU + WARNING |
-| `qsv` | Intel QSV；不可用时报错退出；不能硬解输入则落 CPU + WARNING |
-| `cpu` | 始终用 libx264（默认） |
+| 取值 | 编码器 | 管线 |
+|------|--------|------|
+| `h264` | libx264 | CPU（默认） |
+| `h264_nvenc` | h264_nvenc | GPU / NVENC |
+| `h264_qsv` | h264_qsv | Intel QSV |
+| `h265` | libx265 | CPU |
+| `h265_nvenc` | hevc_nvenc | GPU / NVENC |
+| `h265_qsv` | hevc_qsv | Intel QSV |
+| `av1` | libsvtav1 | CPU |
+| `av1_nvenc` | av1_nvenc | GPU / NVENC |
+| `av1_qsv` | av1_qsv | Intel QSV |
 
-不指定 `--encode` 时默认走 CPU 软解 + libx264 编码。
+不指定 `--encode` 时默认 `h264`（CPU 软解 + libx264）。硬件管线不可用时**报错退出**而非静默降级。
 
-选中的硬件管线只在**能硬解这份输入**时才真正启用：工具开跑前会用 `ffprobe` 取输入的编码格式，再和本机 `ffmpeg -decoders` 里的 `*_cuvid` / `*_qsv` 对照。没有对应硬解实现时（例如 Intel QSV 对 MPEG-4），它会自动改用 CPU 管线并在日志里给出 WARNING —— 这类输入走硬件是**必然失败**（画面的一部分绑不上 GPU 滤镜），不是慢一点的问题。
+选中的硬件管线只在**能硬解这份输入**时才真正启用：开跑前用 `ffprobe` 取输入编码格式，和本机 `ffmpeg -decoders` 里的 `*_cuvid` / `*_qsv` 对照。不能硬解时（例如 QSV 对 MPEG-4）自动改用 CPU 并 WARNING。详见 ADR-0002。
 
 > 早期实现在命令里写死 `-c:v h264_cuvid`，等于假定输入永远是 H.264：HEVC 实测 `rc=3199971767`、VP9 与 MPEG-4 `rc=4294967274`。现在交给 ffmpeg 依据 `-hwaccel` 自选解码器，实测 h264 / hevc / vp9 / mpeg4 四种输入均正常，且日志显示走的是 `pixfmt:cuda`（真硬解，不是软解后回拷）。
 

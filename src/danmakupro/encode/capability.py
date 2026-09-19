@@ -17,45 +17,49 @@ from .probe import run_probe
 
 # 编码模式 → (管线类型, ffmpeg 编码器名, 不可用时的 CPU 回退模式)。
 _MODE_CONFIG: dict[str, tuple[str, str, str]] = {
-    EncodeMode.H264:       ("cpu", "libx264",     EncodeMode.H264),
-    EncodeMode.H264_NVENC: ("gpu", "h264_nvenc",  EncodeMode.H264),
-    EncodeMode.H264_QSV:   ("qsv", "h264_qsv",    EncodeMode.H264),
-    EncodeMode.H265:       ("cpu", "libx265",     EncodeMode.H265),
-    EncodeMode.H265_NVENC: ("gpu", "hevc_nvenc",  EncodeMode.H265),
-    EncodeMode.H265_QSV:   ("qsv", "hevc_qsv",    EncodeMode.H265),
-    EncodeMode.AV1:        ("cpu", "libsvtav1",   EncodeMode.AV1),
-    EncodeMode.AV1_NVENC:  ("gpu", "av1_nvenc",   EncodeMode.AV1),
-    EncodeMode.AV1_QSV:    ("qsv", "av1_qsv",     EncodeMode.AV1),
+    EncodeMode.H264: ("cpu", "libx264", EncodeMode.H264),
+    EncodeMode.H264_NVENC: ("gpu", "h264_nvenc", EncodeMode.H264),
+    EncodeMode.H264_QSV: ("qsv", "h264_qsv", EncodeMode.H264),
+    EncodeMode.H265: ("cpu", "libx265", EncodeMode.H265),
+    EncodeMode.H265_NVENC: ("gpu", "hevc_nvenc", EncodeMode.H265),
+    EncodeMode.H265_QSV: ("qsv", "hevc_qsv", EncodeMode.H265),
+    EncodeMode.AV1: ("cpu", "libsvtav1", EncodeMode.AV1),
+    EncodeMode.AV1_NVENC: ("gpu", "av1_nvenc", EncodeMode.AV1),
+    EncodeMode.AV1_QSV: ("qsv", "av1_qsv", EncodeMode.AV1),
 }
+
 
 # 编码模式 → 管线类型。
 def pipeline_kind(mode: str) -> str:
     """返回编码模式对应的管线类型：cpu / gpu / qsv。"""
     return _MODE_CONFIG[mode][0]
 
+
 # 编码模式 → ffmpeg 编码器名。
 def encoder_for_mode(mode: str) -> str:
     """返回编码模式对应的 ffmpeg 编码器名。"""
     return _MODE_CONFIG[mode][1]
+
 
 # 编码模式 → 不可用时的 CPU 回退模式。
 def fallback_cpu_mode(mode: str) -> str:
     """返回硬件管线不可用时的 CPU 回退模式。"""
     return _MODE_CONFIG[mode][2]
 
+
 # 编码模式 → 用户可读名称。
 def pipeline_label(mode: str) -> str:
     """编码模式的用户可读名称。"""
     labels: dict[str, str] = {
-        EncodeMode.H264:       "CPU (libx264)",
+        EncodeMode.H264: "CPU (libx264)",
         EncodeMode.H264_NVENC: "GPU (NVENC H.264)",
-        EncodeMode.H264_QSV:   "QSV (H.264)",
-        EncodeMode.H265:       "CPU (libx265)",
+        EncodeMode.H264_QSV: "QSV (H.264)",
+        EncodeMode.H265: "CPU (libx265)",
         EncodeMode.H265_NVENC: "GPU (NVENC H.265)",
-        EncodeMode.H265_QSV:   "QSV (H.265)",
-        EncodeMode.AV1:        "CPU (libsvtav1)",
-        EncodeMode.AV1_NVENC:  "GPU (NVENC AV1)",
-        EncodeMode.AV1_QSV:    "QSV (AV1)",
+        EncodeMode.H265_QSV: "QSV (H.265)",
+        EncodeMode.AV1: "CPU (libsvtav1)",
+        EncodeMode.AV1_NVENC: "GPU (NVENC AV1)",
+        EncodeMode.AV1_QSV: "QSV (AV1)",
     }
     return labels.get(mode, mode)
 

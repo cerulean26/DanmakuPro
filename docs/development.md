@@ -31,11 +31,14 @@ DanmakuPro/
 │   │   ├── segments.py       # 渲染段落与文本行
 │   │   └── assets.py         # 资源加载（字体、图片）
 │   ├── encode/               # 编码模块
-│   │   └── ffmpeg.py         # FFmpeg 进程管理与编码器探测
+│   │   ├── ffmpeg.py         # FFmpeg 进程管理
+│   │   ├── capability.py     # 硬件能力检测
+│   │   ├── commands.py       # 编码命令行构建
+│   │   └── probe.py          # 编码器探测与帧率修复
 │   └── utils/                # 工具模块
 │       ├── helpers.py        # 通用工具函数
 │       └── validation.py     # 输入输出校验
-├── tests/                    # 测试（19 个模块；test_e2e_burn.py 为真机用例，标记 slow）
+├── tests/                    # 测试（22 个模块；test_e2e_burn.py 为真机用例，标记 slow）
 ├── docs/                     # 文档
 │   ├── configuration.md      # 完整参数表与配置查找规则
 │   └── development.md        # 本文件

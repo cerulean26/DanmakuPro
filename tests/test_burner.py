@@ -599,7 +599,9 @@ def _gift_event(t=1.5):
 def make_check_burner(mock_deps, tmp_path):
     """构造可直接跑 check() 的 burner，依赖全部可注入。"""
 
-    def _build(*, events, resource, v_info, pipeline="h264_nvenc", config=DEFAULT_CONFIG):
+    def _build(
+        *, events, resource, v_info, pipeline="h264_nvenc", config=DEFAULT_CONFIG
+    ):
         video = tmp_path / "test.mp4"
         video.touch()
         xml = tmp_path / "test.xml"
