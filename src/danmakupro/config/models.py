@@ -15,12 +15,17 @@ from enum import StrEnum
 
 
 class EncodeMode(StrEnum):
-    """编码模式常量"""
+    """编码模式（用户可见的 --encode 取值）"""
 
-    AUTO = "auto"
-    GPU = "gpu"
-    QSV = "qsv"
-    CPU = "cpu"
+    H264 = "h264"
+    H264_NVENC = "h264_nvenc"
+    H264_QSV = "h264_qsv"
+    H265 = "h265"
+    H265_NVENC = "h265_nvenc"
+    H265_QSV = "h265_qsv"
+    AV1 = "av1"
+    AV1_NVENC = "av1_nvenc"
+    AV1_QSV = "av1_qsv"
 
 
 # =============================================================================
@@ -126,7 +131,7 @@ class AnimationParams:
     # 始终使用固定的 *_spawn_interval。
     max_spawn_latency: float | None = 2.0
     gift_dwell_time: float | None = 5.0
-    min_gift_price: float = 0.0
+    min_gift_price: float = 1.0
 
     def __post_init__(self):
         for name in ("text_damping_factor", "gift_damping_factor"):
@@ -211,7 +216,7 @@ class DanmakuConfig:
 # =============================================================================
 # 默认值
 # =============================================================================
-# 各字段默认值即**项目推荐值**（针对直播素材长期调优的结果），也是不带
+# 各字段默认值即项目推荐值（针对直播素材长期调优的结果），也是不带
 # 任何配置文件运行时的生效值。用户可用 danmakupro.yaml 覆盖任意字段。
 #
 # 约束：本处默认值必须与随包分发的 danmakupro.example.yaml 完全一致，

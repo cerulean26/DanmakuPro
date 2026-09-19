@@ -60,9 +60,9 @@ def _mk_resource(
     }
 
 
-def _mk_vinfo(*, w=1920, h=1080, fps=30, frames=3000, vfr=False):
+def _mk_vinfo(*, w=1920, h=1080, fps=30, frames=3000):
     """构造 FFmpegManager.get_video_info 的返回值（3000 帧 @30fps = 100s）。"""
-    return {"w": w, "h": h, "fps": fps, "frames": frames, "vfr": vfr}
+    return {"w": w, "h": h, "fps": fps, "frames": frames}
 
 
 def _make_run_burner(mock_deps, tmp_path):
@@ -364,7 +364,6 @@ class TestBurnerRun:
             "h": 1080,
             "fps": 30,
             "frames": 300,
-            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 
@@ -416,7 +415,6 @@ class TestBurnerRun:
             "h": 1080,
             "fps": 30,
             "frames": 300,
-            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
 
@@ -474,7 +472,6 @@ class TestBurnerRun:
             "h": 1080,
             "fps": 30,
             "frames": 300,
-            "vfr": False,
         }
         mock_encoder.build_command.return_value = ["ffmpeg", "..."]
         # 模拟中断在收尾期间抵达
@@ -602,7 +599,7 @@ def _gift_event(t=1.5):
 def make_check_burner(mock_deps, tmp_path):
     """构造可直接跑 check() 的 burner，依赖全部可注入。"""
 
-    def _build(*, events, resource, v_info, pipeline="gpu", config=DEFAULT_CONFIG):
+    def _build(*, events, resource, v_info, pipeline="h264_nvenc", config=DEFAULT_CONFIG):
         video = tmp_path / "test.mp4"
         video.touch()
         xml = tmp_path / "test.xml"
@@ -663,7 +660,7 @@ class TestCheck:
         assert "文本 2, 礼物 1" in text
         assert "✅ 全部字符已覆盖" in text
         assert "✅ 全部已加载" in text
-        assert "编码器: GPU (NVENC)" in text
+        assert "编码器: GPU (NVENC H.264)" in text
         assert "所有资源完整，可以开始压制" in text
         # 100s 只有 3 条事件，远低于 6 条/秒的基础能力
         assert "冗余" in text
@@ -787,21 +784,3 @@ class TestCheck:
 
         # duration 为 0 时需求按 0 计（兜底分支），不能除零崩溃
         assert "冗余" in _verdict_line(lines, "文本:")
-
-    def test_vfr_warning_logged(self, make_check_burner):
-        """VFR 素材要给出提示：帧率口径已修正，但画面观感可能顿挫。"""
-        events = [DanmakuEvent(time=0.5, user="u1", text="hi")]
-        burner = make_check_burner(
-            events=events,
-            resource=_mk_resource(),
-            v_info=_mk_vinfo(vfr=True),
-        )
-
-        with (
-            patch("danmakupro.core.burner.parse_xml", return_value=events),
-            patch("danmakupro.core.burner.logger") as mock_logger,
-        ):
-            burner.check()
-            warnings = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
-
-        assert any("变帧率(VFR)素材" in w for w in warnings)

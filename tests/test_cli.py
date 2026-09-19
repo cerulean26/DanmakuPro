@@ -93,7 +93,7 @@ class TestCLIMain:
         xml.touch()
 
         with (
-            patch("sys.argv", ["danmakupro", str(video), str(xml), "--encode", "cpu"]),
+            patch("sys.argv", ["danmakupro", str(video), str(xml), "--encode", "h264"]),
             patch("danmakupro.cli.load_config") as mock_load_config,
             patch("danmakupro.cli.configure_logger"),
             patch("danmakupro.cli.ensure_qt_app"),
@@ -106,7 +106,7 @@ class TestCLIMain:
 
             main()
             call_kwargs = mock_burner_cls.call_args[1]
-            assert call_kwargs["encode_mode"] == EncodeMode.CPU
+            assert call_kwargs["encode_mode"] == EncodeMode.H264.value
 
     def test_output_flag(self, tmp_path):
         video = tmp_path / "test.mp4"

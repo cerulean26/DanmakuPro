@@ -15,19 +15,9 @@ if TYPE_CHECKING:
 
 
 class ActiveDanmaku:
-    """活跃弹幕节点：存储当前屏幕上一条弹幕的运行时状态。
+    """活跃弹幕运行时状态：持有事件/布局，管理位置与越界检测。
 
-    职责：
-        - 持有弹幕事件和布局数据
-        - 管理位置状态（current_y、target_y）
-        - 越界检测 (is_out_of_bounds)
-
-    段落解析、折行、尺寸计算、预渲染等构造阶段逻辑已提取至
-    DanmakuLayoutBuilder 和 DanmakuLayout。
-
-    渲染相关的 Qt 操作已提取至 ActiveDanmakuView。
-
-    使用 __slots__ 而非 __dict__ 以节省内存。
+    使用 __slots__ 节省内存。构造阶段逻辑在 DanmakuLayoutBuilder / DanmakuLayout。
     """
 
     __slots__ = [

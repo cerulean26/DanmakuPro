@@ -20,9 +20,7 @@ from .errors import DanmakuProError, handle_error
 from .logger_config import configure_logger
 from .utils.helpers import ensure_qt_app
 
-#: 用户中断（Ctrl+C）的退出码：128 + SIGINT(2)，沿用 POSIX 约定。
-#: 不让它向上抛到解释器 —— 那样 Windows 上会得到 STATUS_CONTROL_C_EXIT
-#: (0xC000013A / 3221225786)，POSIX 上又是另一个数，调用方难以判断。
+#: Ctrl+C 的统一退出码（130 = 128 + SIGINT），屏蔽平台差异。
 EXIT_INTERRUPTED = 130
 
 #: 随包分发的配置模板，`danmakupro --init-config` 的来源。
@@ -30,19 +28,7 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "danmakupro.example.yaml"
 
 
 def init_config(dest: str | None = None, force: bool = False) -> int:
-    """把随包配置模板写到用户指定位置。
-
-    配置是用户私有产物：模板本身不会被自动加载，只有用户主动生成/复制成
-    `danmakupro.yaml` 后才生效。这样既保留了「不改配置也能跑」的默认体验，
-    又不会让某台机器上的临时调参混进版本库。
-
-    Args:
-        dest: 目标路径，默认当前目录下的 danmakupro.yaml
-        force: 目标已存在时是否覆盖
-
-    Returns:
-        进程退出码（0 成功，1 失败）
-    """
+    """将随包配置模板写到用户指定位置，已存在时不覆盖（除非 -f）。"""
     target = Path(dest) if dest else Path("danmakupro.yaml")
     if target.exists() and not force:
         logger.error("{} 已存在，若确认覆盖请加 -f", target)
@@ -77,8 +63,8 @@ def main() -> None:
     parser.add_argument("-o", "--output", default=None, help="输出视频路径")
     parser.add_argument(
         "--encode",
-        choices=[EncodeMode.AUTO, EncodeMode.GPU, EncodeMode.QSV, EncodeMode.CPU],
-        default=EncodeMode.AUTO,
+        choices=[e.value for e in EncodeMode],
+        default=EncodeMode.H264.value,
         help="编码模式",
     )
     parser.add_argument(
@@ -119,7 +105,6 @@ def main() -> None:
 
     ensure_qt_app()
     config = load_config(args.config)
-    # 捕获创建Burner时的异常，避免程序崩溃
     try:
         burner = DanmakuBurner(
             video_in=args.video,

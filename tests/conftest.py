@@ -11,6 +11,7 @@ import pytest
 from PySide6.QtGui import QGuiApplication, QFont, QFontMetrics, QImage, QColor
 
 from danmakupro.config import DEFAULT_CONFIG
+from danmakupro.config.models import EncodeMode
 from danmakupro.encode.ffmpeg import FFmpegManager
 
 style = DEFAULT_CONFIG.style
@@ -69,6 +70,24 @@ def _clear_encode_probe_cache():
     FFmpegManager.clear_probe_cache()
     yield
     FFmpegManager.clear_probe_cache()
+
+
+# =============================================================================
+# FFmpegManager
+# =============================================================================
+
+
+@pytest.fixture
+def ffmpeg_mgr():
+    """一台不触发探测的管理器。
+
+    构造本身不探测（见 FFmpegManager.active_pipeline 的惰性说明），这里再显式
+    指定管线，用例便无需真实 ffmpeg。test_ffmpeg / test_probe / test_commands
+    三个文件共用，故放在 conftest。
+    """
+    mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264)
+    mgr.active_pipeline = EncodeMode.H264
+    return mgr
 
 
 # =============================================================================

@@ -1,13 +1,13 @@
-"""FFmpeg 编码管理器
+"""FFmpeg 进程管理器
 
-负责构建 FFmpeg 命令行、启动进程、写入帧数据、清理资源。
+编排一次压制：解析编码管线、启停 FFmpeg 子进程、写入帧数据、回收资源。
+视频元数据探测见 encode.probe，硬件能力探测见 encode.capability，
+命令行构建见 encode.commands。
 """
 
 from __future__ import annotations
 
 import functools
-import json
-import os
 import re
 import shutil
 import subprocess
@@ -18,30 +18,19 @@ from loguru import logger
 
 from ..config.models import EncodeMode, EncodeParams, SystemParams, DEFAULT_CONFIG
 from ..layout.params import LayerParams
-
-#: 探测子进程允许的最小超时（秒），防止用户把 ffmpeg_timeout 配得过小导致误判
-_PROBE_TIMEOUT_MIN = 1
-
-#: 帧率口径修正达到多大相对偏差才值得提示。CFR 素材的容器舍入通常只有
-#: 万分之几（实测 source/5.flv：22.000 → 21.999），逐条打印纯属噪音。
-_FPS_LOG_TOLERANCE = 0.005
-
-_PIPELINE_LABELS: dict[str, str] = {
-    EncodeMode.GPU: "GPU (NVENC)",
-    EncodeMode.QSV: "QSV",
-    EncodeMode.CPU: "CPU (libx264)",
-}
-
-#: 各硬件管线对应的 ffmpeg -hwaccel 方式
-_HWACCEL_METHOD: dict[str, str] = {
-    EncodeMode.GPU: "cuda",
-    EncodeMode.QSV: "qsv",
-}
-
-#: ffmpeg -decoders 的行形如「V..... vp9_cuvid    Nvidia ... (codec vp9)」，
-#: 行尾括号里的 codec 名与 ffprobe 的 codec_name 同源，可直接对齐，不必
-#: 另维护一张「编码 → 解码器」的映射表。
-_DECODER_LINE_RE = re.compile(r"^\s*V.{5}\s+(\S+)\s+.*\(codec (\S+)\)\s*$")
+from . import probe
+from .capability import (
+    HW_ENCODER_LABELS,
+    can_hw_decode,
+    encoder_for_mode,
+    fallback_cpu_mode,
+    hardware_decodable_codecs,
+    pipeline_kind,
+    pipeline_label,
+    probe_encoder_available,
+    warn_hw_downgrade,
+)
+from .commands import CommandInputs, build_command
 
 
 class FFmpegManager:
@@ -49,25 +38,11 @@ class FFmpegManager:
 
     _SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
 
-    #: VFR 采样判据：在视频前、中、后各取 _VFR_SAMPLE_SECONDS 秒，比较三段
-    #: 局部帧率的相对极差，超过 _VFR_SAMPLE_TOLERANCE 即判为变帧率。
-    #:
-    #: 不使用 r_frame_rate 与 avg_frame_rate 比对：FLV 的 avg_frame_rate 取自
-    #: onMetaData，实测 source/1.flv 标 22/1、真实 19.985fps，会误报。2% 足以
-    #: 区分容器时间戳舍入（实测本项目产物 0.1%）与真正的帧率波动。
-    _VFR_SAMPLE_TOLERANCE = 0.02
-    _VFR_SAMPLE_SECONDS = 5.0
-
-    #: 帧率口径修正的可信区间：frames/duration 与 r_frame_rate 的比值超出该
-    #: 范围，说明 nb_frames 或 duration 本身不可信，回落到 r_frame_rate。
-    _FPS_SANITY_LO = 1 / 3
-    _FPS_SANITY_HI = 3.0
-
     def __init__(
         self,
         video_in: str,
         video_out: str,
-        encode_mode: str = EncodeMode.AUTO,
+        encode_mode: str = EncodeMode.H264,
         encode_params: EncodeParams = DEFAULT_CONFIG.encode,
         system_params: SystemParams = DEFAULT_CONFIG.system,
     ):
@@ -76,22 +51,17 @@ class FFmpegManager:
         self.encode_mode = encode_mode
         self.encode_params = encode_params
         self.system_params = system_params
-        #: FFmpeg 是否以 returncode 0 正常收尾。压制失败时调用方据此清理残缺产物。
+        #: 编码是否正常结束（returncode == 0），失败时用于清理残缺产物。
         self.encode_succeeded: bool = False
-        #: 本次压制是否被用户中断（Ctrl+C）。中断时 FFmpeg 收到 stdin EOF 后仍会
-        #: 以 0 退出，只看 returncode 会误报「压制完成」，故需单独标记。
+        #: 是否被用户中断；须独立于 returncode 判定（中断后 FFmpeg 仍可能返回 0）。
         self.interrupted: bool = False
         self.process: subprocess.Popen | None = None
         self.stderr_thread: threading.Thread | None = None
         self._speed_lock = threading.Lock()
         self._current_speed: float = 0.0
-        #: 编码管线（gpu / qsv / cpu）。**惰性解析** —— 构造时不起子进程探测
-        #: （auto 模式首次约 1.5s），首次读取 active_pipeline 时才探测。
-        #: 这样「只构造不使用」的场景（GUI 建好对象后用户取消、单测只断言
-        #: 构造参数）不必白付探测代价。取值请走 active_pipeline 属性。
+        #: 编码管线，惰性探测，通过 active_pipeline 属性访问。
         self._active_pipeline: str | None = None
-        #: 输入视频的编码格式（ffprobe 的 codec_name）。硬解判据要用，实则为
-        #: 惰性值 —— 见 probe_input_codec 与 get_video_info 的回填。
+        #: 输入视频编码格式，硬解兼容性判据（由 get_video_info 回填）。
         self._input_codec: str | None = None
 
     @property
@@ -106,11 +76,7 @@ class FFmpegManager:
 
     @property
     def active_pipeline(self) -> str:
-        """当前生效的编码管线（gpu / qsv / cpu）。
-
-        首次访问时才解析：探测要起 ffmpeg 子进程（缓存未命中时约 1.5s），
-        构造对象本身不该承担这份代价。解析一次后缓存在实例上。
-        """
+        """当前生效的编码管线（gpu / qsv / cpu），首次访问时惰性探测并缓存。"""
         if self._active_pipeline is None:
             return self._resolve_encode_mode()
         return self._active_pipeline
@@ -132,7 +98,7 @@ class FFmpegManager:
         本方法由 active_pipeline 的 getter 在首次访问时调用，也可显式调用。
 
         Returns:
-            解析出的管线（EncodeMode.GPU / EncodeMode.QSV / EncodeMode.CPU）。
+            解析出的 EncodeMode 值。
 
         Raises:
             RuntimeError: 未找到 ffmpeg，或指定模式对应的编码器不可用。
@@ -145,18 +111,15 @@ class FFmpegManager:
                 "  其他系统: https://ffmpeg.org/download.html"
             )
 
-        timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
-        # CPU 管线用不上输入编码，不必付一遍 ffprobe 的代价
-        codec = None if self.encode_mode == EncodeMode.CPU else self.probe_input_codec()
+        timeout = max(probe.PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
+        kind = pipeline_kind(self.encode_mode)
+        input_codec = None if kind == "cpu" else self.probe_input_codec()
         resolved = _probe_encode_pipeline(
-            str(self.encode_mode), ffmpeg_exe, timeout, codec
+            self.encode_mode, ffmpeg_exe, timeout, input_codec
         )
         self._active_pipeline = resolved
 
-        label = _PIPELINE_LABELS[resolved]
-        if self.encode_mode == EncodeMode.AUTO:
-            label += " — 自动检测" if resolved == EncodeMode.GPU else " — 自动回退"
-        logger.info(f"编码模式: {label}")
+        logger.info(f"编码模式: {pipeline_label(resolved)}")
         return resolved
 
     @staticmethod
@@ -167,8 +130,8 @@ class FFmpegManager:
         否则进程内会一直复用首次探测的结果。测试中亦用于保证用例隔离。
         """
         _probe_encode_pipeline.cache_clear()
-        _hardware_decodable_codecs.cache_clear()
-        _probe_input_codec.cache_clear()
+        hardware_decodable_codecs.cache_clear()
+        probe.probe_input_codec.cache_clear()
 
     def probe_input_codec(self) -> str | None:
         """探测输入视频的编码格式（ffprobe 的 codec_name），失败返回 None。
@@ -178,527 +141,51 @@ class FFmpegManager:
         """
         if self._input_codec is not None:
             return self._input_codec
-        codec = _probe_input_codec(
+        codec = probe.probe_input_codec(
             self.video_in,
-            max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout),
+            max(probe.PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout),
         )
         self._input_codec = codec or None
         return self._input_codec
 
-    @staticmethod
-    def _check_nvenc_available(
-        timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout,
-    ) -> bool:
-        """检查 NVENC 是否可用"""
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if "h264_nvenc" not in result.stdout:
-                return False
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+    def get_video_info(self) -> dict[str, int | float]:
+        """获取视频元数据，返回 {w, h, fps, frames}。
 
-        try:
-            result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-hide_banner",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "nullsrc=s=64x64:d=0.1",
-                    "-c:v",
-                    "h264_nvenc",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-
-    @staticmethod
-    def _check_qsv_available(
-        timeout: int = DEFAULT_CONFIG.system.ffmpeg_timeout,
-    ) -> bool:
-        """检查 QSV 是否可用"""
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            if "h264_qsv" not in result.stdout:
-                return False
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-
-        try:
-            result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-hide_banner",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "nullsrc=s=64x64:d=0.1",
-                    "-c:v",
-                    "h264_qsv",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-
-    @staticmethod
-    def _parse_frame_rate(raw: str | None) -> float:
-        """把 ffprobe 的 "num/den" 形式转成浮点数。
-
-        Args:
-            raw: 形如 "22/1" 的字符串；缺失或非法时返回 0.0
-
-        Returns:
-            帧率；无法解析时返回 0.0（调用方以 > 0 判断是否有效）
+        fps 为渲染用帧率（可能不等于 r_frame_rate，见 probe.resolve_render_fps）。
         """
-        if not raw:
-            return 0.0
-        num, _, den = raw.partition("/")
-        try:
-            numerator = int(num)
-            denominator = int(den) if den else 1
-        except ValueError:
-            return 0.0
-        if denominator == 0:
-            return 0.0
-        return numerator / denominator
-
-    @staticmethod
-    def _resolve_render_fps(nominal_fps: float, frames: int, duration: float) -> float:
-        """确定渲染用的帧率。
-
-        渲染循环按 frame_index / fps 推算弹幕时间，故弹幕层时间轴长度为
-        frames / fps，它必须等于视频真实时长：短了则弹幕层提前耗尽，画面继续
-        播放而弹幕冻结在最后一帧；长了则画面播完仍在输出弹幕。
-
-        r_frame_rate 只是容器标称值，VFR 源上会明显偏离真实均值（例如标称
-        30fps、真实平均 20fps 时，时间轴只有实际时长的 2/3，尾部弹幕全丢），
-        因此只要 frames 与 duration 可用且二者之比可信，就以 frames/duration
-        为准。这样弹幕时间轴天然等于时长，无需改动视频流本身。
-
-        Args:
-            nominal_fps: r_frame_rate 的解析结果
-            frames: 总帧数
-            duration: 真实时长（秒），不可用时为 0
-
-        Returns:
-            渲染帧率；输入不足或比值离谱时回落到 nominal_fps。
-        """
-        if nominal_fps <= 0 or frames <= 0 or duration <= 0:
-            return nominal_fps
-        real_fps = frames / duration
-        if real_fps <= 0:
-            return nominal_fps
-        ratio = real_fps / nominal_fps
-        if not (FFmpegManager._FPS_SANITY_LO <= ratio <= FFmpegManager._FPS_SANITY_HI):
-            return nominal_fps
-        return real_fps
-
-    @staticmethod
-    def _detect_vfr(local_rates: list[float]) -> bool:
-        """根据各采样段的局部帧率判断是否变帧率。
-
-        Args:
-            local_rates: _sample_local_frame_rates 的返回值
-
-        Returns:
-            采样段不足时返回 False（无法判定时不误报）。
-        """
-        if len(local_rates) < 2:
-            return False
-        lo = min(local_rates)
-        hi = max(local_rates)
-        return lo > 0 and (hi - lo) / lo > FFmpegManager._VFR_SAMPLE_TOLERANCE
-
-    def _sample_local_frame_rates(self, duration: float) -> list[float]:
-        """在视频前、中、后各采样一段，返回各段的局部帧率（fps）。
-
-        Args:
-            duration: 视频总时长（秒）
-
-        Returns:
-            各采样段的局部帧率。pts 非单调（段内含 B 帧）的段会被丢弃 ——
-            -read_intervals 按 dts 截断会把局部帧率抬高；无法采样、样本不足
-            或有效段不足时返回空列表，调用方据此按「无法判定」处理而不是误报。
-        """
-        # 短片没必要采样：三段加起来就接近全片，且 seek 误差占比过高。
-        if duration < self._VFR_SAMPLE_SECONDS * 3:
-            return []
-        starts = (
-            0.0,
-            duration / 2,
-            max(0.0, duration - self._VFR_SAMPLE_SECONDS),
-        )
-        timeout = max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
-        rates: list[float] = []
-        for start in starts:
-            spec = f"{start:.3f}%+" + f"{self._VFR_SAMPLE_SECONDS:.3f}"
-            cmd = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-read_intervals",
-                spec,
-                "-show_entries",
-                "frame=pts_time",
-                "-of",
-                "json",
-                self.video_in,
-            ]
-            try:
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=timeout,
-                )
-                raw = json.loads(result.stdout).get("frames", [])
-            except (subprocess.SubprocessError, OSError, ValueError):
-                return []
-            pts: list[float] = []
-            for item in raw:
-                try:
-                    pts.append(float(item["pts_time"]))
-                except (KeyError, TypeError, ValueError):
-                    continue
-            if len(pts) < 2:
-                return []
-            # ffprobe 按解码顺序（dts）输出，段内含 B 帧时 pts 非单调；
-            # -read_intervals 又按 dts 截断，于是 pts 跨度被压缩、局部帧率被
-            # 抬高（实测 source/2026-09-13 17-08-22-543 段 0：101 帧只跨
-            # 4.902s → 20.400，而同一文件中段是精确 20.000）。这是测量伪影
-            # 而非真实波动，丢弃该段。
-            #
-            # 不要改用 max-min 来「修」：实测它与 pts[-1]-pts[0] 结果完全
-            # 相同（同上例两法都是 20.3998），症结在截断不在排序。
-            # 丢弃后若有效段不足两段，_detect_vfr 按「无法判定」处理，不误报。
-            if not all(b > a for a, b in zip(pts, pts[1:])):
-                continue
-            # 单调递增已保证 pts[-1] > pts[0]，无需再设 span <= 0 的兜底。
-            rates.append((len(pts) - 1) / (pts[-1] - pts[0]))
-        return rates
-
-    def _probe_packet_count(self, timeout: float) -> int | None:
-        """用 -count_packets 探测视频流的包数，作为真实帧数的低成本来源。
-
-        `nb_frames` 在 FLV 上恒缺失（实测 source/ 下 7/7），此时 frames 只能
-        按标称帧率推算；而推算值与标称同源，`frames / duration` 必然约掉标称，
-        帧率口径修正退化成消除 int() 取整误差。本方法补上真实帧数。
-
-        成本实测：0.17~0.99s（7 个 FLV + 3 个 MP4）。对照 `-count_frames`，
-        23.6s 素材要 2.8s、1212s 素材要 165.7s（比压制本身还慢），不可用。
-
-        准确性实测：包数在 FLV 与 MP4 上均等于真实帧数 —— 1-弹幕版.mp4 与
-        nb_frames 同为 6802、5-弹幕版.mp4 同为 7960、17-07-58-404.flv 与
-        -count_frames 同为 474。
-
-        Args:
-            timeout: 子进程超时（秒）
-
-        Returns:
-            包数；探测失败、字段缺失或结果非正时返回 None，调用方据此回落到
-            标称推算。「宁可不修正，也不要用错的值」。
-        """
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_packets",
-            "-show_entries",
-            "stream=nb_read_packets",
-            "-of",
-            "json",
-            self.video_in,
-        ]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=timeout,
-            )
-            data = json.loads(result.stdout)
-            count = int(data["streams"][0]["nb_read_packets"])
-        except (
-            subprocess.SubprocessError,
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            IndexError,
-        ):
-            return None
-        return count if count > 0 else None
-
-    def get_video_info(self) -> dict[str, int | float | bool]:
-        """获取视频元数据。
-
-        Returns:
-            w / h / fps / frames 四个基本字段，外加 vfr 标记。
-
-            fps 是**渲染用**帧率，可能不等于 r_frame_rate：当帧数与 duration
-            可用时取 frames / duration，以保证弹幕时间轴长度等于视频真实时长
-            （详见 _resolve_render_fps）。帧数优先取 nb_frames，缺失时用
-            -count_packets 实测（见 _probe_packet_count），再不行才按标称推算。
-
-            vfr 为 True 表示采样发现全片帧率不恒定。弹幕时间轴已按真实平均
-            帧率对齐，不会漂移，但画面帧率波动时弹幕运动会略有顿挫。
-        """
-        if shutil.which("ffprobe") is None:
-            raise RuntimeError(
-                "未找到 ffprobe，请先安装 FFmpeg:\n"
-                "  Windows: winget install ffmpeg 或 scoop install ffmpeg\n"
-                "  其他系统: https://ffmpeg.org/download.html"
-            )
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height,r_frame_rate,nb_frames,codec_name:format=duration",
-            "-of",
-            "json",
-            self.video_in,
-        ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=self.system_params.ffmpeg_timeout,
-        )
-        data = json.loads(result.stdout)
-        info = data["streams"][0]
+        info = probe.read_video_info(self.video_in, self.system_params.ffmpeg_timeout)
         # 顺手回填编码格式：硬解判据与 get_video_info 都要它，顺便宜撮合一处，
         # 免得同一次压制为同一份输入起两遍 ffprobe。
-        self._input_codec = str(info.get("codec_name") or "") or None
-        nominal_fps = FFmpegManager._parse_frame_rate(info.get("r_frame_rate"))
-
-        # nb_frames 在 flv/mp4 上可能缺失或为 "N/A"，不能无条件 int()。
-        raw_frames = info.get("nb_frames")
-        try:
-            frames = int(raw_frames) if raw_frames else 0
-        except (TypeError, ValueError):
-            frames = 0
-
-        try:
-            duration = float(data["format"]["duration"])
-        except (KeyError, TypeError, ValueError):
-            duration = 0.0
-
-        if frames == 0:
-            # nb_frames 缺失（FLV 恒如此）时先探真实包数；探不到再按标称推算 ——
-            # 此时 frames 与标称同源，_resolve_render_fps 里的比值必然约掉，
-            # 等于放弃修正，故这里是「有真实值就用」的最后一道防线。
-            probed = self._probe_packet_count(
-                max(_PROBE_TIMEOUT_MIN, self.system_params.ffmpeg_timeout)
-            )
-            frames = probed if probed is not None else int(duration * nominal_fps)
-
-        fps = FFmpegManager._resolve_render_fps(nominal_fps, frames, duration)
-        if (
-            nominal_fps > 0
-            and abs(fps - nominal_fps) / nominal_fps > _FPS_LOG_TOLERANCE
-        ):
-            logger.info(
-                f"帧率口径修正: r_frame_rate {nominal_fps:.3f} → "
-                f"实测均值 {fps:.3f} (弹幕时间轴按实测值对齐)"
-            )
-        vfr = FFmpegManager._detect_vfr(self._sample_local_frame_rates(duration))
-
+        self._input_codec = info.codec
         return {
-            "w": int(info["width"]),
-            "h": int(info["height"]),
-            "fps": fps,
-            "frames": frames,
-            "vfr": vfr,
+            "w": info.width,
+            "h": info.height,
+            "fps": info.fps,
+            "frames": info.frames,
         }
 
     def build_command(
         self, fps: float, w: int, h: int, layer_params: LayerParams
     ) -> list[str]:
-        """构建 FFmpeg 命令"""
-        if self.active_pipeline == EncodeMode.GPU:
-            return self._build_gpu_command(fps, w, h, layer_params)
-        if self.active_pipeline == EncodeMode.QSV:
-            return self._build_qsv_command(fps, w, h, layer_params)
-        return self._build_cpu_command(fps, w, h, layer_params)
+        """构建 FFmpeg 命令行，管线取当前生效的 active_pipeline。
 
-    def _build_gpu_command(
-        self, fps: float, w: int, h: int, lp: LayerParams
-    ) -> list[str]:
-        # 不写死 -c:v <输入编码>_cuvid，交给 ffmpeg 依据 -hwaccel cuda 自选
-        # 解码器：写死时非 H.264 输入会在绑定 scale_cuda 前就失败（HEVC 实测
-        # rc=3199971767）。实测去掉后 h264/hevc/vp9/mpeg4 均走通且日志仍是
-        # pixfmt:cuda（真硬解，非软解后回拷）；filtergraph 需要 GPU 帧的部分
-        # 由 ffmpeg 自己保证，不可硬解的编码在 _probe_encode_pipeline 里
-        # 已提前判掉并落到 CPU 管线。
-        return [
-            "ffmpeg",
-            "-y",
-            "-hwaccel",
-            "cuda",
-            "-hwaccel_output_format",
-            "cuda",
-            "-i",
-            self.video_in,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgra",
-            "-s",
-            f"{lp.layer_w}x{lp.layer_h}",
-            "-r",
-            str(fps),
-            "-i",
-            "pipe:0",
-            "-filter_complex",
-            (
-                f"[0:v]scale_cuda=w={w}:h={h}:format=yuv420p:interp_algo=lanczos,"
-                f"hwdownload,format=yuv420p[bg];"
-                f"[1:v]format=yuva420p[fg];"
-                f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
-            ),
-            "-map",
-            "[out]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "h264_nvenc",
-            "-preset",
-            self.encode_params.gpu_preset,
-            "-cq:v",
-            str(self.encode_params.gpu_cq),
-            "-rc:v",
-            "constqp",
-            "-c:a",
-            "copy",
-            self.video_out,
-        ]
+        Args:
+            fps: 弹幕层帧率，须与渲染帧率一致
+            w: 输出宽度
+            h: 输出高度
+            layer_params: 弹幕层布局参数
 
-    def _build_qsv_command(
-        self, fps: float, w: int, h: int, lp: LayerParams
-    ) -> list[str]:
-        # 同样不指定输入解码器，理由见 _build_gpu_command。本机 QSV 无
-        # mpeg4 硬解（无 mpeg4_qsv），这类输入靠开跑前的判据落到 CPU。
-        return [
-            "ffmpeg",
-            "-y",
-            "-hwaccel",
-            "qsv",
-            "-hwaccel_output_format",
-            "qsv",
-            "-i",
-            self.video_in,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgra",
-            "-s",
-            f"{lp.layer_w}x{lp.layer_h}",
-            "-r",
-            str(fps),
-            "-i",
-            "pipe:0",
-            "-filter_complex",
-            (
-                f"[0:v]hwdownload,format=nv12,"
-                f"scale={w}:{h}:flags=lanczos,format=yuv420p[bg];"
-                f"[1:v]format=yuva420p[fg];"
-                f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
-            ),
-            "-map",
-            "[out]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "h264_qsv",
-            "-preset",
-            self.encode_params.qsv_preset,
-            "-global_quality",
-            str(self.encode_params.qsv_quality),
-            "-c:a",
-            "copy",
-            self.video_out,
-        ]
-
-    def _build_cpu_command(
-        self, fps: float, w: int, h: int, lp: LayerParams
-    ) -> list[str]:
-        cpu_count = os.cpu_count() or 4
-        encode_threads = max(1, cpu_count - self.encode_params.cpu_min_reserve_threads)
-
-        return [
-            "ffmpeg",
-            "-y",
-            "-i",
-            self.video_in,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgra",
-            "-s",
-            f"{lp.layer_w}x{lp.layer_h}",
-            "-r",
-            str(fps),
-            "-i",
-            "pipe:0",
-            "-filter_complex",
-            (
-                f"[0:v]scale={w}:{h}:flags=lanczos[bg];"
-                f"[1:v]format=yuva420p[fg];"
-                f"[bg][fg]overlay=x={lp.layer_x}:y={lp.layer_y}[out]"
-            ),
-            "-map",
-            "[out]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            self.encode_params.cpu_preset,
-            "-crf",
-            str(self.encode_params.cpu_crf),
-            "-threads",
-            str(encode_threads),
-            "-c:a",
-            "copy",
-            self.video_out,
-        ]
+        Returns:
+            可直接交给 subprocess 的命令行参数列表。
+        """
+        return build_command(
+            self.active_pipeline,
+            CommandInputs(self.video_in, self.video_out, self.encode_params),
+            fps,
+            w,
+            h,
+            layer_params,
+        )
 
     def start(self, ffmpeg_cmd: list[str]) -> None:
         """启动 FFmpeg 进程"""
@@ -783,13 +270,10 @@ class FFmpegManager:
             raise BrokenPipeError(f"FFmpeg 管道断开: {e}") from e
 
     def cleanup(self) -> None:
-        """清理资源。
+        """收尾压制进程：通知 FFmpeg 输入结束，等待其退出并回收管道资源。
 
-        按顺序完成：
-        1. 关闭 stdin 管道，通知 FFmpeg 输入结束
-        2. 等待 stderr 线程结束（避免日志丢失）
-        3. 等待 FFmpeg 进程退出
-        4. 关闭 stderr 管道，释放资源
+        成功、失败与中断三条路径都会调用，故不抛出异常；编码超时（600s）会
+        强制终止子进程。收尾后将 process 置 None，可重复调用。
         """
         proc = self.process
         if proc is None:
@@ -810,10 +294,10 @@ class FFmpegManager:
         try:
             return_code = proc.wait(timeout=600.0)
             if self.interrupted:
-                # 中断时 FFmpeg 有两种死法：控制台 Ctrl+C 会连带杀掉它
-                # （Windows 实测 code=255），只在 Python 侧中断则它按
-                # stdin EOF 正常收尾（code=0）。两者都不是「成功」也不是
-                # 「失败」，输出同样残缺，故统一按中断记，不用 ERROR。
+                # 返回码不能用于判定中断的成败（视信号是否送达子进程，可能是 0），
+                # 故以 interrupted 标记为准。中断既非成功也非失败，产物同样残缺，
+                # 统一按中断记录，不用 ERROR。
+                # 依据见 docs/decisions/ADR-0006-interrupt-handling.md。
                 logger.warning(f"编码已随中断结束 (code={return_code})，输出不完整")
             elif return_code == 0:
                 self.encode_succeeded = True
@@ -835,98 +319,23 @@ class FFmpegManager:
 
 
 # =============================================================================
-# 模块级辅助函数
+# 管线探测编排
 # =============================================================================
 
 
-@functools.lru_cache(maxsize=None)
-def _probe_input_codec(video_in: str, timeout: int) -> str | None:
-    """输入视频的编码格式（ffprobe codec_name），探测失败返回 None。"""
-    if shutil.which("ffprobe") is None:
-        return None
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=codec_name",
-        "-of",
-        "default=nw=1:nk=1",
-        video_in,
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-        )
-        name = result.stdout.strip().splitlines()[0].strip()
-    except (
-        subprocess.SubprocessError,
-        OSError,
-        ValueError,
-        IndexError,
-    ):
-        return None
-    return name or None
+def _check_encoder(mode: str, timeout: int) -> bool:
+    """探测编码模式对应的编码器是否可用。
 
+    编码器名由 _MODE_CONFIG 表提供，不再需要按 GPU/QSV 分两路条件分派。
 
-@functools.lru_cache(maxsize=None)
-def _hardware_decodable_codecs(
-    hwaccel: str, ffmpeg_exe: str, timeout: int
-) -> frozenset[str] | None:
-    """该 ffmpeg 构建里能用 hwaccel 硬解的编码集合，探测失败返回 None。
+    Args:
+        mode: EncodeMode 值
+        timeout: 单次探测子进程的超时（秒）
 
-    `*_cuvid` / `*_qsv` 就是 NVDEC / Quick Sync 的硬解实现所在，行尾括号里的
-    codec 名可直接与 ffprobe 的 codec_name 对齐，故不必写死「编码 → 解码器」
-    映射 —— 换一台机器、换一份 ffmpeg，支持的集合随之变化。
+    Returns:
+        该编码器可用时为 True。
     """
-    suffix = {"cuda": "_cuvid", "qsv": "_qsv"}.get(hwaccel)
-    if suffix is None:
-        return None
-    try:
-        result = subprocess.run(
-            [ffmpeg_exe, "-hide_banner", "-decoders"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-        )
-    except (subprocess.SubprocessError, OSError, TypeError):
-        return None
-
-    codecs = set()
-    for line in result.stdout.splitlines():
-        matched = _DECODER_LINE_RE.match(line)
-        if matched and matched.group(1).endswith(suffix):
-            codecs.add(matched.group(2))
-    return frozenset(codecs)
-
-
-def _can_hw_decode(
-    pipeline: str, ffmpeg_exe: str, timeout: int, input_codec: str | None
-) -> bool:
-    """硬件管线能否硬解这份输入（只关乎解码，无关后续的 NVENC 编码）。
-
-    不可硬解时 ffmpeg 会在绑定 scale_cuda / hwdownload 前就退出，压制是**必然**
-    失败的，所以必须开跑前判掉，而不是等压到一半报 rc=3199971767。
-
-    两种情况按「可以」处理：输入编码未知（ffprobe 探不到，此时后续
-    get_video_info 会给出真正的错误，不该白白丢掉加速）；硬解清单探测失败
-    （宁可不降级，也不该把能走 GPU 的任务一律拖到 CPU）。
-    """
-    if input_codec is None:
-        return True
-    supported = _hardware_decodable_codecs(
-        _HWACCEL_METHOD[pipeline], ffmpeg_exe, timeout
-    )
-    if supported is None:
-        return True
-    return input_codec in supported
+    return probe_encoder_available(encoder_for_mode(mode), timeout)
 
 
 @functools.lru_cache(maxsize=None)
@@ -938,57 +347,33 @@ def _probe_encode_pipeline(
 ) -> str:
     """探测实际可用的编码管线（带进程级缓存）。
 
-    编码器探测要启动 2~4 个 ffmpeg 子进程，实测耗时 auto 1.03s / gpu 1.45s /
-    qsv 2.63s（cpu 无需探测，0.04s）。结果只取决于 ffmpeg 安装、硬件与输入
-    编码，因此在一个进程内缓存即可 —— 否则每次构造 FFmpegManager 都要重付一遍。
+    结果只取决于 ffmpeg 安装、硬件与输入编码，因此在一个进程内缓存即可；
+    否则每次构造 FFmpegManager 都要重付一遍子进程开销。
+
+    依据见 ``docs/decisions/ADR-0002-hardware-pipeline-decoder.md``。
 
     Args:
-        encode_mode: 用户请求的编码模式
+        encode_mode: 用户请求的编码模式（EncodeMode 任一值）
         ffmpeg_exe: ffmpeg 可执行文件路径（参与缓存 key，换 ffmpeg 即失效）
         timeout: 单次探测子进程的超时秒数
         input_codec: 输入视频的编码格式。GPU / QSV 无法硬解该编码时**回落到
             CPU**（并给出 WARNING），因为此时压制必然失败
 
     Returns:
-        EncodeMode 中实际可用的管线
+        EncodeMode 值——可能是入参本身，也可能是 CPU 回退模式
 
     Raises:
         RuntimeError: 显式指定 gpu/qsv 但对应编码器不可用
     """
-    if encode_mode == EncodeMode.CPU:
-        return EncodeMode.CPU
+    kind = pipeline_kind(encode_mode)
+    if kind == "cpu":
+        return encode_mode
 
-    if encode_mode == EncodeMode.GPU:
-        if not FFmpegManager._check_nvenc_available(timeout):
-            raise RuntimeError("未检测到 NVENC 编码器")
-        if not _can_hw_decode(EncodeMode.GPU, ffmpeg_exe, timeout, input_codec):
-            _warn_hw_downgrade(EncodeMode.GPU, input_codec)
-            return EncodeMode.CPU
-        return EncodeMode.GPU
+    if not _check_encoder(encode_mode, timeout):
+        label = HW_ENCODER_LABELS.get(kind, kind)
+        raise RuntimeError(f"未检测到 {label} 编码器")
+    if can_hw_decode(kind, ffmpeg_exe, timeout, input_codec):
+        return encode_mode
+    warn_hw_downgrade(encode_mode, input_codec)
 
-    if encode_mode == EncodeMode.QSV:
-        if not FFmpegManager._check_qsv_available(timeout):
-            raise RuntimeError("未检测到 QSV 编码器")
-        if not _can_hw_decode(EncodeMode.QSV, ffmpeg_exe, timeout, input_codec):
-            _warn_hw_downgrade(EncodeMode.QSV, input_codec)
-            return EncodeMode.CPU
-        return EncodeMode.QSV
-
-    # AUTO：优先生效的第一个可用管线（NVENC > QSV），都不可用才走 CPU
-    for pipeline, checker in (
-        (EncodeMode.GPU, FFmpegManager._check_nvenc_available),
-        (EncodeMode.QSV, FFmpegManager._check_qsv_available),
-    ):
-        if not checker(timeout):
-            continue
-        if _can_hw_decode(pipeline, ffmpeg_exe, timeout, input_codec):
-            return pipeline
-        _warn_hw_downgrade(pipeline, input_codec)
-    return EncodeMode.CPU
-
-
-def _warn_hw_downgrade(pipeline: str, input_codec: str | None) -> None:
-    logger.warning(
-        f"输入编码 {input_codec} 无 {_PIPELINE_LABELS[pipeline]} 硬解，"
-        "本次改用 CPU 管线压制（画面与参数设置不变，仅速度较慢）"
-    )
+    return fallback_cpu_mode(encode_mode)

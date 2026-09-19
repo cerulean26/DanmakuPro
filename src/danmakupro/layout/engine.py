@@ -44,20 +44,17 @@ class LayoutEngine:
         spawn_interval: float,
         max_latency: float | None,
     ) -> float:
-        """按积压量自适应收紧发射间隔（有界延迟控制）。
+        """按积压量自适应收紧发射间隔，使等待时长保持有界。
 
-        基础排空速率是 ``batch_size / spawn_interval``（默认 3 / 0.5s = 6 条/秒）。
-        当积压超过一个批次、且按基础速率清空积压需要的时间超过 ``max_latency`` 时，
-        临时缩短间隔，把排空速率提升到 ``pending / max_latency``。
+        基础排空速率为 ``batch_size / spawn_interval``。当积压超过一个批次、
+        且按基础速率清空积压所需时间超过 ``max_latency`` 时，临时缩短间隔，
+        把排空速率提升到 ``pending / max_latency``，否则沿用基础间隔。
 
-        控制律 ``drain = max(base_rate, pending / max_latency)`` 的稳态解是
-        ``pending* = arrival_rate × max_latency``：只要到达率高于基础速率，积压会
-        收敛到一个**有界**平衡点，而不是像固定间隔那样单调增长 —— 固定间隔下
-        积压会一直累积，视频结束时残留在队列里的事件被永久丢弃，且积压期间
-        弹幕严重滞后于画面（实测 p95 延迟 19.5s、最大 38s）。
+        与固定间隔不同，此控制律下积压收敛到有界平衡点而非单调增长，故不会
+        出现「长期滞后于画面」或「结束时队列残留被丢弃」。实际排空速率还有
+        天然上限：间隔门每帧最多触发一次，故不超过 ``batch_size × fps``。
 
-        实际排空速率还有一个天然上限：间隔门每帧最多触发一次，故不会超过
-        ``batch_size × fps``，极端突发下会自动饱和而不会失控。
+        依据见 ``docs/decisions/ADR-0004-spawn-interval-control-law.md``。
 
         Args:
             pending: 当前时间窗口内尚未发射的同层弹幕数

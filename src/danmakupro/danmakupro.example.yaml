@@ -74,8 +74,8 @@ animation:
 #   gpu_cq: 23                   # NVIDIA NVENC CQ 质量（1~51，越小越好）
 #   qsv_preset: "medium"         # Intel QSV 预设
 #   qsv_quality: 23              # Intel QSV 质量（1~51，越小越好）
-#   cpu_preset: "veryfast"       # libx264 预设
-#   cpu_crf: 23                  # libx264 CRF 质量（0~51，越小越好）
+#   cpu_preset: "veryfast"       # libx264/libx265/libsvtav1 预设
+#   cpu_crf: 23                  # CPU CRF 质量（0~51，越小越好）
 #   cpu_min_reserve_threads: 2   # CPU 编码保留线程数
 
 # =============================================================================

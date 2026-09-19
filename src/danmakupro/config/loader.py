@@ -54,12 +54,7 @@ def _config_priority_paths(config_path: str | Path | None = None) -> list[Path]:
 
 
 def _warn_type_mismatch(value: Any, field_path: str) -> None:
-    """对 YAML 解析后常见的类型陷阱发出预警。
-
-    YAML 有一些反直觉的隐式转换（如 no → False, yes → True），
-    此函数仅对明显可疑的类型不匹配发出警告，不做强制拦截。
-    实际值域校验由 dataclass 的 __post_init__ 负责。
-    """
+    """对 YAML 解析后常见的类型陷阱发出预警（如 no→False, yes→True）。"""
     # YAML 把 "no"/"yes"/"on"/"off" 解析为 bool 是常见坑
     if isinstance(value, bool):
         logger.warning(

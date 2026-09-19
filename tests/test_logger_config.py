@@ -1,5 +1,6 @@
 """logger_config 单元测试"""
 
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -44,6 +45,38 @@ class TestConfigureLogger:
         assert kwargs["rotation"] == "10 MB"
         assert kwargs["retention"] == 7
         assert kwargs["encoding"] == "utf-8"
+
+    def test_file_sink_uses_danmakupro_name(self, monkeypatch, tmp_path):
+        """文件名须体现「装的是全应用日志」—— 旧名 ffmpeg.log 名实不符。"""
+        monkeypatch.setenv("DANMAKUPRO_LOG_DIR", str(tmp_path / "logs"))
+        mock_logger = MagicMock()
+        with patch("danmakupro.logger_config.logger", mock_logger):
+            configure_logger()
+        _, kwargs = mock_logger.add.call_args_list[1]
+        assert Path(kwargs["sink"]).name == "danmakupro.log"
+
+    def test_log_dir_resolved_at_call_time(self, monkeypatch, tmp_path):
+        """目录在调用时求值，不在 import 期缓存。
+
+        用例与 import 顺序对抗：``lc`` 早已导入，此处才设置环境变量 —— 若实现
+        改回模块级 ``_LOG_DIR = resolve_log_dir()``，本用例会落回仓库 logs/ 而失败。
+        """
+        monkeypatch.setenv("DANMAKUPRO_LOG_DIR", str(tmp_path / "late"))
+        mock_logger = MagicMock()
+        with patch("danmakupro.logger_config.logger", mock_logger):
+            configure_logger()
+        _, kwargs = mock_logger.add.call_args_list[1]
+        assert Path(kwargs["sink"]).parent == tmp_path / "late"
+
+    def test_logs_file_path_on_success(self, monkeypatch, tmp_path):
+        """成功挂上文件 sink 后打印路径，让「日志落在哪」在终端可见。"""
+        log_dir = tmp_path / "logs"
+        monkeypatch.setenv("DANMAKUPRO_LOG_DIR", str(log_dir))
+        mock_logger = MagicMock()
+        with patch("danmakupro.logger_config.logger", mock_logger):
+            configure_logger()
+        mock_logger.info.assert_called_once()
+        assert str(log_dir / "danmakupro.log") in mock_logger.info.call_args.args[0]
 
 
 class TestResolveLogDir:
@@ -94,7 +127,7 @@ class TestFileSinkUnavailable:
         """
         blocker = tmp_path / "blocker"
         blocker.write_text("", encoding="utf-8")  # 是文件，其下无法建目录
-        monkeypatch.setattr(lc, "_LOG_DIR", blocker / "logs")
+        monkeypatch.setenv("DANMAKUPRO_LOG_DIR", str(blocker / "logs"))
 
         mock_logger = MagicMock()
         with patch("danmakupro.logger_config.logger", mock_logger):
@@ -102,6 +135,7 @@ class TestFileSinkUnavailable:
 
         assert mock_logger.add.call_count == 1  # 只有 stderr sink
         mock_logger.warning.assert_called_once()
+        mock_logger.info.assert_not_called()
 
 
 class TestFlushLogs:

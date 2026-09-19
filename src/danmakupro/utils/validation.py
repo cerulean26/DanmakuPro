@@ -20,8 +20,7 @@ SUPPORTED_VIDEO_EXTS = frozenset(
 )
 SUPPORTED_OUTPUT_EXTS = frozenset({".mp4", ".flv", ".mkv", ".avi", ".mov"})
 
-#: 覆盖确认函数的签名：传入已存在的输出路径，返回是否覆盖。
-#: 参数化是为了让调用方（尤其是测试）能注入固定答案，不必真的读终端。
+#: 覆盖确认回调类型：Path -> bool。
 ConfirmOverwrite = Callable[[Path], bool]
 
 
@@ -72,22 +71,7 @@ def _human_size(num_bytes: int) -> str:
 
 
 def confirm_overwrite(path: Path) -> bool:
-    """在交互式终端询问是否覆盖已存在的输出文件。
-
-    为什么要问：同名文件已存在有两种截然不同的来源 —— 用户自己压好的成片
-    （覆盖即不可逆丢失），或上一次失败/中断留下的残缺文件（本就该丢掉）。
-    程序无法可靠区分，于是把决定权交回用户。
-
-    非交互环境（stdin 不是终端：管道、重定向、CI、被其他程序调用）不做询问。
-    此时 ``input()`` 要么立刻拿到 EOF、要么永久阻塞等待一个不会到来的输入，
-    两者都不是期望行为；这种情况按「不覆盖」处理并提示 ``-f``。
-
-    Args:
-        path: 已存在的输出文件路径
-
-    Returns:
-        True 表示覆盖，False 表示保留原文件
-    """
+    """交互式终端询问是否覆盖，非交互环境拒绝覆盖并提示 -f。"""
     if sys.stdin is None or not sys.stdin.isatty():
         logger.warning(f"输出文件已存在: {path}")
         logger.warning("当前不是交互式终端，无法询问是否覆盖；如需覆盖请加 -f")
@@ -132,20 +116,7 @@ def validate_output_path(
     force: bool = False,
     confirm: ConfirmOverwrite | None = None,
 ) -> None:
-    """校验输出路径，并处理「同名文件已存在」。
-
-    已存在时的分支顺序：``force`` 为真则直接覆盖；否则询问用户。询问被拒绝
-    时抛 :class:`InputError` —— 让调用方以非 0 退出码结束，而不是静默产出
-    「什么都没做、却看起来成功」的结果。
-
-    Args:
-        video_out: 输出视频路径
-        force: 是否跳过确认直接覆盖
-        confirm: 覆盖确认函数，默认 :func:`confirm_overwrite`
-
-    Raises:
-        InputError: 输出目录不存在、格式不支持，或用户拒绝覆盖
-    """
+    """校验输出路径。force 为真直接覆盖，否则询问用户，拒绝时抛 InputError。"""
     path = Path(video_out)
     out_dir = path.parent
 

@@ -1,4 +1,8 @@
-"""FFmpegManager 单元测试"""
+"""FFmpegManager 单元测试：管线解析、惰性探测、探测缓存与进程生命周期。
+
+其余三块分别测在 test_capability.py（编码器可用性与硬解清单）、
+test_probe.py（视频元数据与帧率口径）、test_commands.py（命令行构建）。
+"""
 
 import contextlib
 import io
@@ -7,18 +11,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from danmakupro.config.models import EncodeMode, SystemParams, DEFAULT_CONFIG
 from danmakupro.encode.ffmpeg import (
     FFmpegManager,
-    _hardware_decodable_codecs,
+    _check_encoder,
     _probe_encode_pipeline,
-    _probe_input_codec,
 )
-from danmakupro.config.models import (
-    EncodeMode,
-    SystemParams,
-    DEFAULT_CONFIG,
-)
-from danmakupro.layout.params import LayerParams
 
 
 @contextlib.contextmanager
@@ -44,15 +42,6 @@ def _stderr_reader(mgr, payload: bytes):
         with patch("threading.Thread", side_effect=_fake_thread):
             mgr.start(["ffmpeg", "-i", "in.mp4", "out.mp4"])
     yield captured["target"]
-
-
-@pytest.fixture
-def ffmpeg_mgr():
-    # 构造不触发探测（见 FFmpegManager.active_pipeline 的惰性说明），
-    # 这里显式指定管线，用例便无需真实 ffmpeg。
-    mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.CPU)
-    mgr.active_pipeline = EncodeMode.CPU
-    return mgr
 
 
 # =============================================================================
@@ -83,7 +72,7 @@ def _hw_decoders():
     集合写成 {h264}，与 _bare_mgr 的默认编码配套。
     """
     with patch(
-        "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
+        "danmakupro.encode.capability.hardware_decodable_codecs",
         return_value=frozenset({"h264"}),
     ):
         yield
@@ -95,137 +84,46 @@ class TestResolveEncodeMode:
     def test_ffmpeg_not_found_raises(self):
         with patch("shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
-                _bare_mgr(EncodeMode.CPU)._resolve_encode_mode()
+                _bare_mgr(EncodeMode.H264)._resolve_encode_mode()
 
     def test_cpu_mode(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            mgr = _bare_mgr(EncodeMode.CPU)
+            mgr = _bare_mgr(EncodeMode.H264)
             mgr._resolve_encode_mode()
-            assert mgr.active_pipeline == EncodeMode.CPU
+            assert mgr.active_pipeline == EncodeMode.H264
 
-    def test_gpu_mode_nvenc_available(self):
+    def test_nvenc_mode_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder", return_value=True
             ):
-                mgr = _bare_mgr(EncodeMode.GPU)
+                mgr = _bare_mgr(EncodeMode.H264_NVENC)
                 mgr._resolve_encode_mode()
-                assert mgr.active_pipeline == EncodeMode.GPU
+                assert mgr.active_pipeline == EncodeMode.H264_NVENC
 
-    def test_gpu_mode_nvenc_unavailable_raises(self):
+    def test_nvenc_mode_unavailable_raises(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=False
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder", return_value=False
             ):
                 with pytest.raises(RuntimeError, match="未检测到 NVENC"):
-                    _bare_mgr(EncodeMode.GPU)._resolve_encode_mode()
-
-    def test_auto_mode_prefers_nvenc(self):
-        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=True
-            ):
-                mgr = _bare_mgr(EncodeMode.AUTO)
-                mgr._resolve_encode_mode()
-                assert mgr.active_pipeline == EncodeMode.GPU
-
-    def test_auto_mode_falls_back_to_qsv(self):
-        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=False
-            ):
-                with patch.object(
-                    FFmpegManager, "_check_qsv_available", return_value=True
-                ):
-                    mgr = _bare_mgr(EncodeMode.AUTO)
-                    mgr._resolve_encode_mode()
-                    assert mgr.active_pipeline == EncodeMode.QSV
-
-    def test_auto_mode_falls_back_to_cpu(self):
-        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=False
-            ):
-                with patch.object(
-                    FFmpegManager, "_check_qsv_available", return_value=False
-                ):
-                    mgr = _bare_mgr(EncodeMode.AUTO)
-                    mgr._resolve_encode_mode()
-                    assert mgr.active_pipeline == EncodeMode.CPU
+                    _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
 
     def test_qsv_mode_available(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(FFmpegManager, "_check_qsv_available", return_value=True):
-                mgr = _bare_mgr(EncodeMode.QSV)
+            with patch("danmakupro.encode.ffmpeg._check_encoder", return_value=True):
+                mgr = _bare_mgr(EncodeMode.H264_QSV)
                 mgr._resolve_encode_mode()
-                assert mgr.active_pipeline == EncodeMode.QSV
+                assert mgr.active_pipeline == EncodeMode.H264_QSV
 
 
 # =============================================================================
-# 硬解判据：不可硬解的输入必须从 GPU / QSV 落到 CPU
+# 硬解判据：不可硬解的输入必须从硬件管线落到 CPU 管线
 # =============================================================================
-
-#: 仿照 ffmpeg -decoders 的输出（标题行、音频解码器行为干扰项，故意保留）
-_DECODERS_OUTPUT = """\
-Decoders:
- V..... = Video decoder
- V..... h264_cuvid           Nvidia CUVID H264 decoder (codec h264)
- V..... hevc_cuvid           Nvidia CUVID HEVC decoder (codec hevc)
- V....D vp9_qsv              VP9 video (Intel Quick Sync Video acceleration) (codec vp9)
- A..... mp3                  MP3 decoder (codec mp3)
-"""
-
-
-class TestHardwareDecodableCodecs:
-    """从 ffmpeg -decoders 反推「这份 ffmpeg 能硬解哪些编码」。
-
-    不写死「编码 → 解码器」映射，是因为可用解码器取决于 ffmpeg 的构建选项：
-    移植性差一层，这里坚持从运行时拿。
-    """
-
-    def test_parses_codecs_by_hwaccel(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=_DECODERS_OUTPUT)
-            cuda = _hardware_decodable_codecs("cuda", "/usr/bin/ffmpeg", 5)
-            qsv = _hardware_decodable_codecs("qsv", "/usr/bin/ffmpeg", 5)
-        assert cuda == frozenset({"h264", "hevc"})
-        assert qsv == frozenset({"vp9"})
-
-    def test_probe_failure_returns_none(self):
-        """探测失败要返回 None 而不是空集合 —— 空集合等于「什么都不支持」，
-        会把所有任务一律降级到 CPU；None 才能表达「不知道，别乱降级」。
-        """
-        with patch(
-            "subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 5)
-        ):
-            assert _hardware_decodable_codecs("cuda", "/usr/bin/ffmpeg", 5) is None
-
-    def test_unsupported_hwaccel_returns_none(self):
-        assert _hardware_decodable_codecs("videotoolbox", "/usr/bin/ffmpeg", 5) is None
-
-
-class TestProbeInputCodec:
-    def test_returns_codec_name(self):
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(stdout="hevc\n")
-                assert _probe_input_codec("in.mp4", 5) == "hevc"
-
-    def test_ffprobe_missing_returns_none(self):
-        with patch("shutil.which", return_value=None):
-            assert _probe_input_codec("in.mp4", 5) is None
-
-    def test_failure_returns_none(self):
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch(
-                "subprocess.run",
-                side_effect=subprocess.CalledProcessError(1, "ffprobe"),
-            ):
-                assert _probe_input_codec("in.mp4", 5) is None
 
 
 class TestHwDecodeFallback:
-    """不可硬解必须落到 CPU：GPU 路径对此类输入是**必然失败**，不是慢一点。"""
+    """不可硬解必须落到 CPU 管线：GPU 路径对此类输入是**必然失败**，不是慢一点。"""
 
     @pytest.fixture(autouse=True)
     def _clean(self):
@@ -237,57 +135,41 @@ class TestHwDecodeFallback:
     def _hw(self):
         """只放行 h264：这里测的是降级规则，不该掺本机真实的硬解清单。"""
         with patch(
-            "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
+            "danmakupro.encode.capability.hardware_decodable_codecs",
             return_value=frozenset({"h264"}),
         ):
             yield
 
-    def _resolve(self, mode, codec, *, nvenc=True, qsv=False):
+    def _resolve(self, mode, codec):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager, "_check_nvenc_available", return_value=nvenc
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder", return_value=True
             ):
-                with patch.object(
-                    FFmpegManager, "_check_qsv_available", return_value=qsv
-                ):
-                    mgr = _bare_mgr(mode, codec=codec)
-                    mgr._resolve_encode_mode()
+                mgr = _bare_mgr(mode, codec=codec)
+                mgr._resolve_encode_mode()
         return mgr.active_pipeline
 
     def test_gpu_undecodable_falls_back_to_cpu(self):
-        # _hw_decoders 只放行 h264，输入却是 hevc
-        assert self._resolve(EncodeMode.GPU, "hevc") == EncodeMode.CPU
+        assert self._resolve(EncodeMode.H264_NVENC, "hevc") == EncodeMode.H264
 
     def test_qsv_undecodable_falls_back_to_cpu(self):
-        assert self._resolve(EncodeMode.QSV, "mpeg4", nvenc=False, qsv=True) == (
-            EncodeMode.CPU
-        )
+        assert self._resolve(EncodeMode.H264_QSV, "mpeg4") == EncodeMode.H264
 
     def test_decodable_keeps_gpu(self):
-        assert self._resolve(EncodeMode.GPU, "h264") == EncodeMode.GPU
-
-    def test_auto_picks_hardware_that_can_decode(self):
-        """GPU 不可硬解但 QSV 可以时，应当落到 QSV 而不是直接回退 CPU。"""
-        with patch(
-            "danmakupro.encode.ffmpeg._hardware_decodable_codecs",
-            side_effect=lambda hwaccel, _exe, _t: (
-                frozenset({"hevc"}) if hwaccel == "qsv" else frozenset({"h264"})
-            ),
-        ):
-            assert self._resolve(EncodeMode.AUTO, "hevc", qsv=True) == EncodeMode.QSV
+        assert self._resolve(EncodeMode.H264_NVENC, "h264") == EncodeMode.H264_NVENC
 
     def test_unknown_codec_keeps_requested_pipeline(self):
         """输入编码探不到时不降级 —— 那会让硬加速平白丢失，真正的错误由
         后续 get_video_info() 给出。
         """
         with patch.object(FFmpegManager, "probe_input_codec", return_value=None):
-            assert self._resolve(EncodeMode.GPU, None) == EncodeMode.GPU
+            assert self._resolve(EncodeMode.H264_NVENC, None) == EncodeMode.H264_NVENC
 
     def test_unknown_support_set_keeps_requested_pipeline(self):
         with patch(
-            "danmakupro.encode.ffmpeg._hardware_decodable_codecs", return_value=None
+            "danmakupro.encode.capability.hardware_decodable_codecs", return_value=None
         ):
-            assert self._resolve(EncodeMode.GPU, "hevc") == EncodeMode.GPU
+            assert self._resolve(EncodeMode.H264_NVENC, "hevc") == EncodeMode.H264_NVENC
 
 
 # =============================================================================
@@ -298,7 +180,7 @@ class TestHwDecodeFallback:
 class TestLazyProbe:
     """构造 FFmpegManager 不应付探测代价，首次读取 active_pipeline 才探测。
 
-    探测要起 ffmpeg 子进程（auto 模式缓存未命中时约 1.5s）。若构造即探测，
+    探测要起 ffmpeg 子进程（缓存未命中时约 1.5s）。若构造即探测，
     GUI 里建好对象后用户取消、单测只断言构造参数等场景都会白付这份代价。
     """
 
@@ -307,26 +189,26 @@ class TestLazyProbe:
             with patch(
                 "danmakupro.encode.ffmpeg._probe_encode_pipeline",
             ) as mock_probe:
-                FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264)
                 assert mock_probe.call_count == 0
 
     def test_first_access_triggers_probe(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch(
                 "danmakupro.encode.ffmpeg._probe_encode_pipeline",
-                return_value=EncodeMode.GPU,
+                return_value=EncodeMode.H264_NVENC,
             ) as mock_probe:
-                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
-                assert mgr.active_pipeline == EncodeMode.GPU
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264_NVENC)
+                assert mgr.active_pipeline == EncodeMode.H264_NVENC
                 assert mock_probe.call_count == 1
 
     def test_probe_runs_once_across_repeated_reads(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             with patch(
                 "danmakupro.encode.ffmpeg._probe_encode_pipeline",
-                return_value=EncodeMode.CPU,
+                return_value=EncodeMode.H264,
             ) as mock_probe:
-                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264)
                 for _ in range(3):
                     mgr.active_pipeline
                 assert mock_probe.call_count == 1
@@ -338,7 +220,7 @@ class TestLazyProbe:
         退出码不变；只是报错时机从「创建 burner」推迟到「执行」。
         """
         with patch("shutil.which", return_value=None):
-            mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.CPU)
+            mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264)
             with pytest.raises(RuntimeError, match="未找到 FFmpeg"):
                 mgr.active_pipeline
 
@@ -347,9 +229,9 @@ class TestLazyProbe:
             with patch(
                 "danmakupro.encode.ffmpeg._probe_encode_pipeline",
             ) as mock_probe:
-                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.AUTO)
-                mgr.active_pipeline = EncodeMode.QSV
-                assert mgr.active_pipeline == EncodeMode.QSV
+                mgr = FFmpegManager("test.mp4", "out.mp4", EncodeMode.H264_NVENC)
+                mgr.active_pipeline = EncodeMode.H264_QSV
+                assert mgr.active_pipeline == EncodeMode.H264_QSV
                 assert mock_probe.call_count == 0
 
 
@@ -365,178 +247,56 @@ class TestProbeCache:
 
     def test_probe_runs_once_for_repeated_construction(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager,
-                "_check_nvenc_available",
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder",
                 return_value=True,
-            ) as mock_nvenc:
+            ) as mock_check:
                 for _ in range(3):
-                    _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
-                assert mock_nvenc.call_count == 1
+                    _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
+                assert mock_check.call_count == 1
 
     def test_probe_reruns_after_cache_clear(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager,
-                "_check_nvenc_available",
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder",
                 return_value=True,
-            ) as mock_nvenc:
-                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+            ) as mock_check:
+                _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
                 FFmpegManager.clear_probe_cache()
-                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
-                assert mock_nvenc.call_count == 2
+                _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
+                assert mock_check.call_count == 2
 
     def test_probe_reruns_when_ffmpeg_path_differs(self):
-        with patch.object(
-            FFmpegManager,
-            "_check_nvenc_available",
+        with patch(
+            "danmakupro.encode.ffmpeg._check_encoder",
             return_value=True,
-        ) as mock_nvenc:
+        ) as mock_check:
             with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
+                _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
             with patch("shutil.which", return_value="/opt/other/ffmpeg"):
-                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
-            assert mock_nvenc.call_count == 2
+                _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
+            assert mock_check.call_count == 2
 
     def test_probe_reruns_when_timeout_differs(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager,
-                "_check_nvenc_available",
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder",
                 return_value=True,
-            ) as mock_nvenc:
-                _bare_mgr(EncodeMode.AUTO)._resolve_encode_mode()
-                fast = _bare_mgr(EncodeMode.AUTO)
+            ) as mock_check:
+                _bare_mgr(EncodeMode.H264_NVENC)._resolve_encode_mode()
+                fast = _bare_mgr(EncodeMode.H264_NVENC)
                 fast.system_params = SystemParams(ffmpeg_timeout=30)
                 fast._resolve_encode_mode()
-                assert mock_nvenc.call_count == 2
+                assert mock_check.call_count == 2
 
     def test_cpu_mode_never_probes(self):
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
-            with patch.object(
-                FFmpegManager,
-                "_check_nvenc_available",
+            with patch(
+                "danmakupro.encode.ffmpeg._check_encoder",
                 return_value=True,
-            ) as mock_nvenc:
-                _bare_mgr(EncodeMode.CPU)._resolve_encode_mode()
-                assert mock_nvenc.call_count == 0
-
-
-# =============================================================================
-# ffmpeg_timeout 接线
-# =============================================================================
-
-
-class TestTimeoutPlumbing:
-    """ffmpeg_timeout 必须真正驱动子进程超时。"""
-
-    def test_check_nvenc_uses_given_timeout(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_nvenc", returncode=0),
-                MagicMock(returncode=0),
-            ]
-            FFmpegManager._check_nvenc_available(7)
-            assert [c.kwargs["timeout"] for c in mock_run.call_args_list] == [7, 7]
-
-    def test_ffprobe_uses_configured_timeout(self, ffmpeg_mgr):
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":1920,"height":1080,'
-            '"r_frame_rate":"30/1","nb_frames":300}],'
-            '"format":{"duration":"10.0"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                ffmpeg_mgr.get_video_info()
-                assert mock_run.call_args.kwargs["timeout"] == (
-                    ffmpeg_mgr.system_params.ffmpeg_timeout
-                )
-
-
-# =============================================================================
-# _check_nvenc_available / _check_qsv_available
-# =============================================================================
-
-
-class TestCheckEncoders:
-    def test_nvenc_not_in_encoders(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="h264_amf", returncode=0)
-            assert FFmpegManager._check_nvenc_available() is False
-
-    def test_nvenc_available(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_nvenc", returncode=0),
-                MagicMock(returncode=0),
-            ]
-            assert FFmpegManager._check_nvenc_available() is True
-
-    def test_nvenc_test_encode_fails(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_nvenc", returncode=0),
-                MagicMock(returncode=1),
-            ]
-            assert FFmpegManager._check_nvenc_available() is False
-
-    def test_nvenc_file_not_found(self):
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert FFmpegManager._check_nvenc_available() is False
-
-    def test_qsv_available(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_qsv", returncode=0),
-                MagicMock(returncode=0),
-            ]
-            assert FFmpegManager._check_qsv_available() is True
-
-    def test_nvenc_test_encode_timeout(self):
-        """探测第二段（真实编码试探）超时要判为不可用，且不能往上抛。"""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_nvenc", returncode=0),
-                subprocess.TimeoutExpired("ffmpeg", 5),
-            ]
-            assert FFmpegManager._check_nvenc_available() is False
-
-    def test_qsv_not_in_encoders(self):
-        """encoders 列表里没有 h264_qsv：第一段就返回，不进入试探。"""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="h264_nvenc", returncode=0)
-            assert FFmpegManager._check_qsv_available() is False
-            assert mock_run.call_count == 1
-
-    def test_qsv_test_encode_fails(self):
-        """编码器在列表里但真实试探返回非 0（驱动缺失等）：判不可用。"""
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_qsv", returncode=0),
-                MagicMock(returncode=1),
-            ]
-            assert FFmpegManager._check_qsv_available() is False
-
-    def test_qsv_ffmpeg_missing(self):
-        """ffmpeg 不存在：直接判不可用，不抛异常打断启动流程。"""
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            assert FFmpegManager._check_qsv_available() is False
-
-    def test_qsv_probe_timeout(self):
-        """列编码器这一步超时（机器卡顿）：同样判不可用而非抛出。"""
-        with patch(
-            "subprocess.run", side_effect=subprocess.TimeoutExpired("ffmpeg", 5)
-        ):
-            assert FFmpegManager._check_qsv_available() is False
-
-    def test_qsv_test_encode_timeout(self):
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout="h264_qsv", returncode=0),
-                subprocess.TimeoutExpired("ffmpeg", 5),
-            ]
-            assert FFmpegManager._check_qsv_available() is False
+            ) as mock_check:
+                _bare_mgr(EncodeMode.H264)._resolve_encode_mode()
+                assert mock_check.call_count == 0
 
 
 # =============================================================================
@@ -551,474 +311,31 @@ class TestProbeEncodePipeline:
     """
 
     def test_gpu_unavailable_raises(self):
-        with patch.object(FFmpegManager, "_check_nvenc_available", return_value=False):
+        with patch(
+            "danmakupro.encode.ffmpeg._check_encoder", return_value=False
+        ):
             with pytest.raises(RuntimeError, match="未检测到 NVENC"):
-                _probe_encode_pipeline(EncodeMode.GPU, "/usr/bin/ffmpeg", 5)
+                _probe_encode_pipeline(EncodeMode.H264_NVENC, "/usr/bin/ffmpeg", 5)
 
     def test_qsv_unavailable_raises(self):
-        with patch.object(FFmpegManager, "_check_qsv_available", return_value=False):
+        with patch(
+            "danmakupro.encode.ffmpeg._check_encoder", return_value=False
+        ):
             with pytest.raises(RuntimeError, match="未检测到 QSV"):
-                _probe_encode_pipeline(EncodeMode.QSV, "/usr/bin/ffmpeg", 5)
+                _probe_encode_pipeline(EncodeMode.H264_QSV, "/usr/bin/ffmpeg", 5)
 
     def test_cpu_never_probes_encoders(self):
         """CPU 是兜底路径，任何探测都不该发生（否则每次构造白等 1.5s）。"""
-        with patch.object(FFmpegManager, "_check_nvenc_available") as mock_nvenc:
-            with patch.object(FFmpegManager, "_check_qsv_available") as mock_qsv:
-                resolved = _probe_encode_pipeline(
-                    EncodeMode.CPU,
-                    "/usr/bin/ffmpeg",
-                    5,
-                )
-                assert resolved == EncodeMode.CPU
-                mock_nvenc.assert_not_called()
-                mock_qsv.assert_not_called()
-
-
-# =============================================================================
-# _parse_frame_rate
-# =============================================================================
-
-
-class TestParseFrameRate:
-    """r_frame_rate 是 "num/den" 字符串，任何畸形都要回落到 0.0。
-
-    返回 0.0 而非抛异常，是为了让调用方走「无法解析标称帧率 → 换别的口径」，
-    而不是让整个 get_video_info 崩掉。分母为 0 尤其要拦：不拦就是除零。
-    """
-
-    @pytest.mark.parametrize(
-        "raw, expected",
-        [
-            ("30/1", 30.0),
-            ("30000/1001", pytest.approx(29.97, rel=1e-4)),
-            ("25", 25.0),  # 无分母，按 /1 处理
-            (None, 0.0),  # 字段缺失
-            ("", 0.0),  # 空串
-            ("abc/1", 0.0),  # 分子非数字
-            ("30/abc", 0.0),  # 分母非数字
-            ("30/0", 0.0),  # 分母为 0
-        ],
-    )
-    def test_parse(self, raw, expected):
-        assert FFmpegManager._parse_frame_rate(raw) == expected
-
-
-# =============================================================================
-# get_video_info
-# =============================================================================
-
-
-class TestGetVideoInfo:
-    def test_ffprobe_not_found(self, ffmpeg_mgr):
-        with patch("shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="未找到 ffprobe"):
-                ffmpeg_mgr.get_video_info()
-
-    def test_returns_video_info(self, ffmpeg_mgr):
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":1920,"height":1080,'
-            '"r_frame_rate":"30000/1001","nb_frames":300}],'
-            '"format":{"duration":"10.010"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result):
-                info = ffmpeg_mgr.get_video_info()
-                assert info["w"] == 1920
-                assert info["h"] == 1080
-                assert info["frames"] == 300
-
-    def test_estimates_frames_from_duration(self, ffmpeg_mgr):
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":1280,"height":720,'
-            '"r_frame_rate":"30/1","nb_frames":0}],'
-            '"format":{"duration":"5.0"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result):
-                info = ffmpeg_mgr.get_video_info()
-                assert info["frames"] == 150
-
-    def test_nb_frames_na_falls_back_to_duration_estimate(self, ffmpeg_mgr):
-        """nb_frames 写成 "N/A" 时必须估算，不能让整次探测失败。
-
-        这不是假想输入：FLV 容器（本项目主用格式）的 nb_frames 常常是
-        "N/A"，此时 int("N/A") 抛 ValueError，若不接住整个压制都起不来。
-        """
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":640,"height":360,'
-            '"r_frame_rate":"25/1","nb_frames":"N/A"}],'
-            '"format":{"duration":"4.0"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 100  # 4.0s × 25fps 估算
-        assert info["fps"] == 25.0
-
-    def test_missing_nb_frames_falls_back_to_duration_estimate(self, ffmpeg_mgr):
-        """nb_frames 为 null（部分 mp4 如此）走同一条估算路径。"""
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":640,"height":360,'
-            '"r_frame_rate":"25/1","nb_frames":null}],'
-            '"format":{"duration":"4.0"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 100
-
-    def test_codec_name_is_backfilled(self, ffmpeg_mgr):
-        """get_video_info 顺手记下 codec_name，硬解判据不必再起一遍 ffprobe。"""
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":640,"height":360,"r_frame_rate":"25/1",'
-            '"nb_frames":100,"codec_name":"hevc"}],'
-            '"format":{"duration":"4.0"}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                ffmpeg_mgr.get_video_info()
-                run_count = mock_run.call_count
-        assert ffmpeg_mgr._input_codec == "hevc"
-        assert ffmpeg_mgr.probe_input_codec() == "hevc"
-        assert mock_run.call_count == run_count  # 回填后才不会再探
-
-    def test_missing_duration_falls_back_to_nominal_fps(self, ffmpeg_mgr):
-        """format 段没有 duration：不能崩，fps 回落到标称帧率。"""
-        mock_result = MagicMock()
-        mock_result.stdout = (
-            '{"streams":[{"width":640,"height":360,'
-            '"r_frame_rate":"25/1","nb_frames":100}],'
-            '"format":{}}'
-        )
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", return_value=mock_result):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 100
-        assert info["fps"] == 25.0
-        assert info["vfr"] is False  # duration 未知时不该报 VFR
-
-    def test_missing_nb_frames_uses_packet_count(self, ffmpeg_mgr):
-        """nb_frames 缺失（FLV 恒如此）时改用 -count_packets 的实测帧数。
-
-        若沿用标称推算，frames 与标称同源、二者之比必然约掉，帧率口径修正
-        会退化成只消除 int() 取整误差 —— 标称明显偏离真实均值的素材修不出来。
-        """
-        side = [
-            MagicMock(
-                stdout='{"streams":[{"width":640,"height":360,'
-                '"r_frame_rate":"25/1","nb_frames":null}],'
-                '"format":{"duration":"4.0"}}'
-            ),
-            MagicMock(stdout='{"streams":[{"nb_read_packets":"97"}]}'),
-        ]
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", side_effect=side):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 97  # 不是 int(4.0 × 25) = 100
-        assert info["fps"] == pytest.approx(24.25)  # 97 / 4.0
-
-    def test_packet_count_unavailable_falls_back_to_estimate(self, ffmpeg_mgr):
-        """包数探不到时回落到标称推算，且不能因此让整次探测失败。"""
-        side = [
-            MagicMock(
-                stdout='{"streams":[{"width":640,"height":360,'
-                '"r_frame_rate":"25/1","nb_frames":null}],'
-                '"format":{"duration":"4.0"}}'
-            ),
-            MagicMock(stdout='{"streams":[{}]}'),
-        ]
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", side_effect=side):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 100
-        assert info["fps"] == 25.0
-
-
-class TestProbePacketCount:
-    """-count_packets 是真实帧数的低成本来源，探测失败必须安静回落。"""
-
-    def test_returns_packet_count(self, ffmpeg_mgr):
-        payload = '{"streams":[{"nb_read_packets":"474"}]}'
-        with patch("subprocess.run", return_value=MagicMock(stdout=payload)):
-            assert ffmpeg_mgr._probe_packet_count(10.0) == 474
-
-    def test_uses_count_packets_not_count_frames(self, ffmpeg_mgr):
-        """必须用 -count_packets。
-
-        -count_frames 在长素材上比压制本身还慢（实测 1212s 素材 165.7s），
-        而 -count_packets 只要 0.53s，两者结果一致。
-        """
-        payload = '{"streams":[{"nb_read_packets":"1"}]}'
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=payload)
-            ffmpeg_mgr._probe_packet_count(10.0)
-        cmd = mock_run.call_args[0][0]
-        assert "-count_packets" in cmd
-        assert "-count_frames" not in cmd
-
-    @pytest.mark.parametrize(
-        "stdout",
-        [
-            '{"streams":[{}]}',  # 字段缺失
-            '{"streams":[]}',  # streams 为空
-            "not json",  # JSON 畸形
-            '{"streams":[{"nb_read_packets":"0"}]}',  # 非正
-            '{"streams":[{"nb_read_packets":"abc"}]}',  # 无法转 int
-        ],
-    )
-    def test_returns_none_on_bad_payload(self, ffmpeg_mgr, stdout):
-        with patch("subprocess.run", return_value=MagicMock(stdout=stdout)):
-            assert ffmpeg_mgr._probe_packet_count(10.0) is None
-
-    def test_returns_none_on_process_failure(self, ffmpeg_mgr):
-        with patch("subprocess.run", side_effect=OSError):
-            assert ffmpeg_mgr._probe_packet_count(10.0) is None
-
-
-# =============================================================================
-# 帧率口径与 VFR 判定
-# =============================================================================
-
-
-def _probe_json(rate: str, frames: int | None, duration: str) -> str:
-    """构造 ffprobe 主探测的输出。"""
-    nb = "null" if frames is None else str(frames)
-    return (
-        '{"streams":[{"width":1920,"height":1080,'
-        f'"r_frame_rate":"{rate}","nb_frames":{nb}}}],'
-        f'"format":{{"duration":"{duration}"}}}}'
-    )
-
-
-def _sample_json(count: int, interval: float) -> str:
-    """构造一段采样的 pts_time 列表，count 帧、间隔 interval 秒。"""
-    pts = ",".join(f'{{"pts_time":"{i * interval:.4f}"}}' for i in range(count))
-    return '{"frames":[' + pts + "]}"
-
-
-class TestResolveRenderFps:
-    """渲染帧率必须满足 frames / fps == duration，否则弹幕时间轴对不上画面。"""
-
-    def test_uses_real_average_when_nominal_differs(self):
-        # 标称 30fps、实际 2000 帧/100s = 20fps。按标称渲染，时间轴只有 66.7s，
-        # 后 1/3 的弹幕会全部丢失。
-        assert FFmpegManager._resolve_render_fps(30.0, 2000, 100.0) == 20.0
-
-    def test_keeps_nominal_for_cfr_source(self):
-        assert FFmpegManager._resolve_render_fps(29.97, 300, 10.01) == pytest.approx(
-            29.97, rel=1e-3
-        )
-
-    def test_falls_back_when_duration_unknown(self):
-        assert FFmpegManager._resolve_render_fps(30.0, 2000, 0.0) == 30.0
-
-    def test_falls_back_when_frames_unknown(self):
-        assert FFmpegManager._resolve_render_fps(30.0, 0, 100.0) == 30.0
-
-    def test_falls_back_when_ratio_implausible(self):
-        # 300 帧 / 1s = 300fps，与标称差 10 倍，说明 duration 不可信
-        assert FFmpegManager._resolve_render_fps(30.0, 300, 1.0) == 30.0
-
-    def test_falls_back_when_nominal_invalid(self):
-        assert FFmpegManager._resolve_render_fps(0.0, 2000, 100.0) == 0.0
-
-    def test_infinite_duration_falls_back_to_nominal(self):
-        """防御分支：duration 为 inf 时 frames/duration == 0.0。
-
-        实测这条分支只有 duration=inf 能触发（300/inf 得到 0.0）；真实的
-        ffprobe 不会输出 inf，所以它属于防御性代码而非真实路径。仍写用例是
-        为了锁住「宁可回落到标称帧率，也绝不返回 0」这个行为 —— 返回 0 会让
-        frame_index / fps 直接除零。
-        """
-        assert FFmpegManager._resolve_render_fps(30.0, 300, float("inf")) == 30.0
-
-    def test_nan_duration_falls_back_to_nominal(self):
-        """nan 会穿过开头的 `duration <= 0` 检查（nan 与任何数比较都是 False），
-        必须依靠后面的比值合理性检查拦下。"""
-        assert FFmpegManager._resolve_render_fps(30.0, 300, float("nan")) == 30.0
-
-
-class TestDetectVfr:
-    def test_constant_rate_is_not_vfr(self):
-        assert FFmpegManager._detect_vfr([20.0, 20.0, 20.0]) is False
-
-    def test_fluctuating_rate_is_vfr(self):
-        assert FFmpegManager._detect_vfr([20.0, 24.0, 20.0]) is True
-
-    def test_insufficient_samples_is_not_vfr(self):
-        assert FFmpegManager._detect_vfr([20.0]) is False
-        assert FFmpegManager._detect_vfr([]) is False
-
-    def test_zero_rate_is_not_vfr(self):
-        assert FFmpegManager._detect_vfr([0.0, 0.0]) is False
-
-
-class TestSampleLocalFrameRates:
-    def test_samples_three_segments(self, ffmpeg_mgr):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=_sample_json(100, 0.05))
-            rates = ffmpeg_mgr._sample_local_frame_rates(100.0)
-        assert len(rates) == 3
-        assert all(r == pytest.approx(20.0, rel=1e-2) for r in rates)
-
-    def test_skips_short_video(self, ffmpeg_mgr):
-        with patch("subprocess.run") as mock_run:
-            assert ffmpeg_mgr._sample_local_frame_rates(10.0) == []
-            mock_run.assert_not_called()
-
-    def test_returns_empty_on_probe_error(self, ffmpeg_mgr):
-        with patch("subprocess.run", side_effect=OSError):
-            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
-
-    def test_returns_empty_when_too_few_frames(self, ffmpeg_mgr):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=_sample_json(1, 0.05))
-            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
-
-    def test_returns_empty_on_malformed_json(self, ffmpeg_mgr):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="not json")
-            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
-
-    def test_skips_entries_with_bad_pts_time(self, ffmpeg_mgr):
-        """单条 pts_time 畸形只跳过该条，不能让整段采样作废。
-
-        这里逐条 try/except 而非整体包住，正是为了保留有效样本；一旦退化成
-        抛异常，VFR 判定会被外层吞成「无法判定」而永久失灵 —— 静默失效。
-        """
-        payload = (
-            '{"frames":['
-            '{"pts_time":"0.0000"},'
-            '{"no_pts":1},'  # KeyError
-            '{"pts_time":"abc"},'  # ValueError
-            '{"pts_time":null},'  # TypeError
-            '{"pts_time":"0.1000"}'
-            "]}"
-        )
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=payload)
-            rates = ffmpeg_mgr._sample_local_frame_rates(100.0)
-        # 三段各自只剩 2 个有效 pts，跨 0.1s → 10fps
-        assert len(rates) == 3
-        assert all(r == pytest.approx(10.0) for r in rates)
-
-    def test_drops_non_monotonic_segment(self, ffmpeg_mgr):
-        """段内含 B 帧时 pts 非单调，该段必须丢弃而不是参与极差计算。
-
-        实测 source/2026-09-13 17-08-22-543 段 0 即此情形：101 帧只跨 4.902s
-        → 20.400（同一文件中段是精确 20.000），把三段极差推到 1.999%，距 2%
-        误报阈值只差 0.001%。丢弃该段后极差归零。
-        """
-        bad = (
-            '{"frames":[{"pts_time":"0.0000"},{"pts_time":"4.9040"},'
-            '{"pts_time":"2.2540"}]}'
-        )
-        good = _sample_json(100, 0.05)  # 20fps，单调递增
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(stdout=bad),
-                MagicMock(stdout=good),
-                MagicMock(stdout=good),
-            ]
-            rates = ffmpeg_mgr._sample_local_frame_rates(100.0)
-        assert len(rates) == 2  # 段 0 被丢弃，其余两段保留
-        assert all(r == pytest.approx(20.0, rel=1e-2) for r in rates)
-
-    def test_returns_empty_when_all_pts_not_monotonic(self, ffmpeg_mgr):
-        """所有段都非单调 → 无有效段，按「无法判定」处理而不是误报。
-
-        单调性校验同时挡住了 pts 全相同（span=0）这条路径：非单调即丢弃，
-        不会算出 inf 去污染后面的极差判定。
-        """
-        payload = '{"frames":[{"pts_time":"1.0000"},{"pts_time":"1.0000"}]}'
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout=payload)
-            assert ffmpeg_mgr._sample_local_frame_rates(100.0) == []
-
-
-class TestGetVideoInfoFrameRate:
-    """get_video_info 返回的 fps 要让弹幕时间轴等于视频真实时长。"""
-
-    def test_vfr_source_gets_real_average_fps(self, ffmpeg_mgr):
-        side = [
-            MagicMock(stdout=_probe_json("30/1", 2000, "100.0")),
-            MagicMock(stdout=_sample_json(100, 0.05)),  # 20fps
-            MagicMock(stdout=_sample_json(100, 0.04)),  # 25fps
-            MagicMock(stdout=_sample_json(100, 0.05)),  # 20fps
-        ]
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", side_effect=side):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["frames"] == 2000
-        assert info["fps"] == 20.0
-        assert info["frames"] / info["fps"] == 100.0
-        assert info["vfr"] is True
-
-    def test_cfr_source_keeps_nominal_fps(self, ffmpeg_mgr):
-        side = [
-            MagicMock(stdout=_probe_json("30/1", 3000, "100.0")),
-            MagicMock(stdout=_sample_json(150, 0.0333)),
-            MagicMock(stdout=_sample_json(150, 0.0333)),
-            MagicMock(stdout=_sample_json(150, 0.0333)),
-        ]
-        with patch("shutil.which", return_value="/usr/bin/ffprobe"):
-            with patch("subprocess.run", side_effect=side):
-                info = ffmpeg_mgr.get_video_info()
-        assert info["fps"] == 30.0
-        assert info["vfr"] is False
-
-
-# =============================================================================
-# build_command
-# =============================================================================
-
-
-class TestBuildCommand:
-    def test_cpu_command(self, ffmpeg_mgr):
-        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
-        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
-        assert cmd[0] == "ffmpeg"
-        assert "libx264" in cmd
-        assert "pipe:0" in cmd
-
-    def test_gpu_command(self, ffmpeg_mgr):
-        ffmpeg_mgr.active_pipeline = EncodeMode.GPU
-        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
-        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
-        assert "h264_nvenc" in cmd
-        assert "cuda" in cmd
-
-    def test_qsv_command(self, ffmpeg_mgr):
-        ffmpeg_mgr.active_pipeline = EncodeMode.QSV
-        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
-        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
-        assert "h264_qsv" in cmd
-
-    def test_gpu_command_does_not_force_input_decoder(self, ffmpeg_mgr):
-        """GPU 命令不得在输入侧写死解码器。
-
-        写死 `-c:v h264_cuvid` 时，HEVC / VP9 / MPEG4 输入在绑定 scale_cuda
-        前就失败（本机实测 HEVC rc=3199971767、VP9 与 MPEG4 rc=4294967274），
-        交给 -hwaccel cuda 自选才算得通。输出编码器仍须是 h264_nvenc。
-        """
-        ffmpeg_mgr.active_pipeline = EncodeMode.GPU
-        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
-        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
-        assert "-c:v" not in cmd[: cmd.index("-i")]
-        assert "h264_nvenc" in cmd
-
-    def test_qsv_command_does_not_force_input_decoder(self, ffmpeg_mgr):
-        """同 GPU：输入侧不写死 h264_qsv，输出侧照旧用 h264_qsv 编码。"""
-        ffmpeg_mgr.active_pipeline = EncodeMode.QSV
-        lp = LayerParams(layer_w=1920, layer_h=1080, layer_x=0, layer_y=0)
-        cmd = ffmpeg_mgr.build_command(30, 1920, 1080, lp)
-        assert "-c:v" not in cmd[: cmd.index("-i")]
-        assert "h264_qsv" in cmd
+        with patch(
+            "danmakupro.encode.ffmpeg._check_encoder"
+        ) as mock_check:
+            resolved = _probe_encode_pipeline(
+                EncodeMode.H264,
+                "/usr/bin/ffmpeg",
+                5,
+            )
+            assert resolved == EncodeMode.H264
+            mock_check.assert_not_called()
 
 
 # =============================================================================
@@ -1057,219 +374,58 @@ class TestProcessLifecycle:
         mock_proc.stdin = MagicMock()
         mock_proc.stdin.write.side_effect = BrokenPipeError
         ffmpeg_mgr.process = mock_proc
-        with pytest.raises(BrokenPipeError):
+        with pytest.raises(BrokenPipeError, match="FFmpeg 管道断开"):
             ffmpeg_mgr.submit_frame(memoryview(b"data"))
 
-    def test_cleanup_closes_resources(self, ffmpeg_mgr):
+    def test_cleanup_sets_process_to_none(self, ffmpeg_mgr):
         mock_proc = MagicMock()
-        mock_proc.stdin = MagicMock()
-        mock_proc.stderr = MagicMock()
+        mock_proc.poll.return_value = 0
         mock_proc.wait.return_value = 0
-        ffmpeg_mgr.process = mock_proc
-        ffmpeg_mgr.stderr_thread = MagicMock()
-        ffmpeg_mgr.stderr_thread.is_alive.return_value = False
-        ffmpeg_mgr.cleanup()
-        mock_proc.stdin.close.assert_called_once()
-        mock_proc.wait.assert_called_once()
-
-    def test_cleanup_no_process(self, ffmpeg_mgr):
-        ffmpeg_mgr.process = None
-        ffmpeg_mgr.cleanup()
-
-    @pytest.mark.parametrize(
-        "return_code",
-        [
-            0,  # 只在 Python 侧中断，FFmpeg 按 stdin EOF 正常收尾
-            255,  # 控制台 Ctrl+C 连带杀掉 FFmpeg（Windows 实测码）
-        ],
-    )
-    def test_cleanup_interrupted_not_marked_success(
-        self,
-        ffmpeg_mgr,
-        return_code,
-    ):
-        """中断时无论 FFmpeg 怎么退出，都不能记成压制成功。
-
-        更关键的是也不能记成「压制失败」：那是主动取消，不是故障。
-        """
-        mock_proc = MagicMock()
         mock_proc.stdin = MagicMock()
         mock_proc.stderr = MagicMock()
-        mock_proc.wait.return_value = return_code
         ffmpeg_mgr.process = mock_proc
         ffmpeg_mgr.stderr_thread = MagicMock()
         ffmpeg_mgr.stderr_thread.is_alive.return_value = False
-        ffmpeg_mgr.interrupted = True
-
         ffmpeg_mgr.cleanup()
-        assert ffmpeg_mgr.encode_succeeded is False
+        assert ffmpeg_mgr.process is None
+        assert ffmpeg_mgr.encode_succeeded
 
-    def test_health_check_process_dead(self, ffmpeg_mgr):
+    def test_cleanup_marks_failure_on_nonzero_return(self, ffmpeg_mgr):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 1
-        mock_proc.returncode = 1
-        ffmpeg_mgr.process = mock_proc
-        assert ffmpeg_mgr._health_check() is False
-
-    def test_health_check_process_alive(self, ffmpeg_mgr):
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        ffmpeg_mgr.process = mock_proc
-        assert ffmpeg_mgr._health_check() is True
-
-    def test_current_speed_property(self, ffmpeg_mgr):
-        assert ffmpeg_mgr.current_speed == 0.0
-        with ffmpeg_mgr._speed_lock:
-            ffmpeg_mgr._current_speed = 2.5
-        assert ffmpeg_mgr.current_speed == 2.5
-
-
-# =============================================================================
-# stderr 读取线程
-# =============================================================================
-
-
-class TestStderrReader:
-    """stderr 逐行解析 —— 编码速度与故障日志都只在这条路径上产生。
-
-    这条路径出错不会抛异常，只会让 current_speed 永远为 0、或把 ffmpeg 的
-    错误行降级成 debug，属于典型的静默失效，因此值得逐分支钉住。
-    """
-
-    def test_extracts_speed_from_progress_line(self, ffmpeg_mgr):
-        payload = b"frame= 120 fps=30 q=28.0 size=1kB time=00:00:04.00 speed=1.85x\n"
-        with _stderr_reader(ffmpeg_mgr, payload) as read:
-            read()
-        assert ffmpeg_mgr.current_speed == pytest.approx(1.85)
-
-    def test_progress_line_without_speed_keeps_previous_value(self, ffmpeg_mgr):
-        """首帧的 frame= 行通常还没有 speed= 字段，不能把速度抹回 0。"""
-        with ffmpeg_mgr._speed_lock:
-            ffmpeg_mgr._current_speed = 3.0
-        payload = b"frame= 1 fps=0.0 q=0.0 size=0kB time=00:00:00.00\n"
-        with _stderr_reader(ffmpeg_mgr, payload) as read:
-            read()
-        assert ffmpeg_mgr.current_speed == 3.0
-
-    def test_logs_lines_by_severity(self, ffmpeg_mgr):
-        """error 行必须记 error 级：降级成 debug 后用户看不到失败原因。"""
-        payload = (
-            b"[h264 @ 0x1] Error while decoding stream #0:0\n"
-            b"[swscaler @ 0x2] Warning: data is not aligned\n"
-            b"  Stream mapping:\n"
-            b"\n"
-        )
-        with patch("danmakupro.encode.ffmpeg.logger") as mock_logger:
-            with _stderr_reader(ffmpeg_mgr, payload) as read:
-                read()
-        assert mock_logger.error.call_count == 1
-        assert "Error while decoding" in mock_logger.error.call_args[0][0]
-        assert mock_logger.warning.call_count == 1
-        assert "Warning: data is not aligned" in mock_logger.warning.call_args[0][0]
-        # 空行被 continue 掉，普通行只剩 1 条
-        assert mock_logger.debug.call_count == 1
-        assert "Stream mapping" in mock_logger.debug.call_args[0][0]
-
-    def test_progress_line_is_not_also_logged(self, ffmpeg_mgr):
-        """frame= 行只用于取速度，不能同时漏进日志 —— 否则每帧刷一行。"""
-        payload = b"frame= 120 fps=30 speed=2.00x\n"
-        with patch("danmakupro.encode.ffmpeg.logger") as mock_logger:
-            with _stderr_reader(ffmpeg_mgr, payload) as read:
-                read()
-        mock_logger.debug.assert_not_called()
-        mock_logger.error.assert_not_called()
-        mock_logger.warning.assert_not_called()
-
-    def test_noop_when_process_already_cleared(self, ffmpeg_mgr):
-        """cleanup() 可能在线程读到第一行之前就把 process 置空（真实竞态），
-        此时必须安静返回，而不是抛 AttributeError 把线程打死。"""
-        with _stderr_reader(ffmpeg_mgr, b"frame= 1 speed=1x\n") as read:
-            ffmpeg_mgr.process = None
-            read()
-        assert ffmpeg_mgr.current_speed == 0.0
-
-
-# =============================================================================
-# 进程收尾的异常路径
-# =============================================================================
-
-
-class TestCleanupFailures:
-    """收尾阶段任何一步出问题都不能让清理半途而废（残留产物、残留管道）。"""
-
-    def test_submit_frame_process_alive_but_stdin_missing(self, ffmpeg_mgr):
-        """进程活着但 stdin 已不可用（收尾竞态）：明确报「未启动」。"""
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None  # 健康检查通过
-        mock_proc.stdin = None  # 但管道没了
-        ffmpeg_mgr.process = mock_proc
-        with pytest.raises(RuntimeError, match="FFmpeg 未启动"):
-            ffmpeg_mgr.submit_frame(memoryview(b"data"))
-
-    def test_cleanup_waits_for_stderr_thread(self, ffmpeg_mgr):
-        """必须等 stderr 线程读完再关管道，否则会丢日志。"""
-        mock_proc = MagicMock()
+        mock_proc.wait.return_value = 1
         mock_proc.stdin = MagicMock()
         mock_proc.stderr = MagicMock()
-        mock_proc.wait.return_value = 0
         ffmpeg_mgr.process = mock_proc
         ffmpeg_mgr.stderr_thread = MagicMock()
-        ffmpeg_mgr.stderr_thread.is_alive.return_value = True
+        ffmpeg_mgr.stderr_thread.is_alive.return_value = False
         ffmpeg_mgr.cleanup()
-        ffmpeg_mgr.stderr_thread.join.assert_called_once_with(
-            timeout=ffmpeg_mgr.system_params.stderr_thread_timeout,
+        assert not ffmpeg_mgr.encode_succeeded
+
+
+# =============================================================================
+# stderr 解析
+# =============================================================================
+
+
+class TestStderrParsing:
+    def test_speed_parsed_from_stderr(self, ffmpeg_mgr):
+        payload = (
+            b"frame=  100 fps=0.0 q=-0.0 size=     256kB time=00:00:04.00 "
+            b"bitrate= 524.3kbits/s speed=2.5x\n"
         )
+        with _stderr_reader(ffmpeg_mgr, payload) as target:
+            target()
+            assert ffmpeg_mgr.current_speed == 2.5
 
-    def test_cleanup_swallows_stdin_close_error(self, ffmpeg_mgr):
-        """stdin 可能已被 FFmpeg 侧关掉，close() 报错不能中断后续收尾。"""
-        mock_proc = MagicMock()
-        mock_proc.stdin = MagicMock()
-        mock_proc.stdin.close.side_effect = OSError("already closed")
-        mock_proc.stderr = MagicMock()
-        mock_proc.wait.return_value = 0
-        ffmpeg_mgr.process = mock_proc
-        ffmpeg_mgr.stderr_thread = None
-        ffmpeg_mgr.cleanup()
-        mock_proc.wait.assert_called_once()  # 后续步骤照常执行
+    def test_error_line_does_not_set_speed(self, ffmpeg_mgr):
+        payload = b"Error: something went wrong\n"
+        with _stderr_reader(ffmpeg_mgr, payload) as target:
+            target()
+            assert ffmpeg_mgr.current_speed == 0.0
 
-    def test_cleanup_swallows_stderr_close_error(self, ffmpeg_mgr):
-        mock_proc = MagicMock()
-        mock_proc.stdin = MagicMock()
-        mock_proc.stderr = MagicMock()
-        mock_proc.stderr.close.side_effect = OSError("already closed")
-        mock_proc.wait.return_value = 0
-        ffmpeg_mgr.process = mock_proc
-        ffmpeg_mgr.stderr_thread = None
-        ffmpeg_mgr.cleanup()
-        assert ffmpeg_mgr.process is None  # 结尾的置空仍发生
-
-    def test_failed_encode_is_logged_as_error(self, ffmpeg_mgr):
-        """非中断且非 0 退出 = 真失败：记 error，且不能置 encode_succeeded。"""
-        mock_proc = MagicMock()
-        mock_proc.stdin = MagicMock()
-        mock_proc.stderr = MagicMock()
-        mock_proc.wait.return_value = 1
-        ffmpeg_mgr.process = mock_proc
-        ffmpeg_mgr.stderr_thread = None
-        with patch("danmakupro.encode.ffmpeg.logger") as mock_logger:
-            ffmpeg_mgr.cleanup()
-        assert ffmpeg_mgr.encode_succeeded is False
-        assert "压制失败" in mock_logger.error.call_args[0][0]
-
-    def test_encode_timeout_kills_process(self, ffmpeg_mgr):
-        """wait 超时（600s）不能把主进程挂死：强杀后再回收。"""
-        mock_proc = MagicMock()
-        mock_proc.stdin = MagicMock()
-        mock_proc.stderr = MagicMock()
-        mock_proc.wait.side_effect = [
-            subprocess.TimeoutExpired("ffmpeg", 600),
-            0,
-        ]
-        ffmpeg_mgr.process = mock_proc
-        ffmpeg_mgr.stderr_thread = None
-        with patch("danmakupro.encode.ffmpeg.logger") as mock_logger:
-            ffmpeg_mgr.cleanup()
-        mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2  # 第一次超时，第二次回收
-        assert mock_logger.warning.call_count == 1
-        assert ffmpeg_mgr.process is None
+    def test_warning_line_does_not_set_speed(self, ffmpeg_mgr):
+        payload = b"Warning: deprecated option\n"
+        with _stderr_reader(ffmpeg_mgr, payload) as target:
+            target()
+            assert ffmpeg_mgr.current_speed == 0.0

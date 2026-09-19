@@ -29,6 +29,8 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 
 不设该变量时，日志目录按运行形态自动选择：源码检出写到**仓库根**的 `logs/`；wheel / pip 安装后写到**用户级目录**（Windows `%LOCALAPPDATA%\DanmakuPro\logs`，其它平台 `$XDG_STATE_HOME/DanmakuPro/logs`，未设置时回落 `~/.local/state`）。
 
+日志文件名为 `danmakupro.log`，装的是**全应用**日志（含 CLI、配置加载、画面合成、ffmpeg 子进程各模块，不只 ffmpeg）。每次运行启动时会打印日志文件路径（未设置环境变量时即绝对路径），单文件超过 10 MB 轮转、最多保留 7 个文件。
+
 > 早期实现一律按 `Path(__file__)` 往上数三级猜「项目根」。这在 src 布局的源码检出里恰好成立，但安装后代码在 `site-packages` 下，同样三级得到的是 Python 自己的 `Lib\` —— 日志既看不见，系统级安装时还会因无写权限在启动第一步就 `PermissionError`。
 
 ## 参数表
@@ -96,10 +98,11 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 
 | 取值 | 行为 |
 |------|------|
-| `auto` | 依次试 NVENC → QSV，都不行才用 CPU |
-| `gpu` | 只用 NVIDIA NVENC；NVENC 不可用时报错退出 |
-| `qsv` | 只用 Intel QSV；QSV 不可用时报错退出 |
-| `cpu` | 始终用 libx264 |
+| `gpu` | NVIDIA NVENC；不可用时报错退出；不能硬解输入则落 CPU + WARNING |
+| `qsv` | Intel QSV；不可用时报错退出；不能硬解输入则落 CPU + WARNING |
+| `cpu` | 始终用 libx264（默认） |
+
+不指定 `--encode` 时默认走 CPU 软解 + libx264 编码。
 
 选中的硬件管线只在**能硬解这份输入**时才真正启用：工具开跑前会用 `ffprobe` 取输入的编码格式，再和本机 `ffmpeg -decoders` 里的 `*_cuvid` / `*_qsv` 对照。没有对应硬解实现时（例如 Intel QSV 对 MPEG-4），它会自动改用 CPU 管线并在日志里给出 WARNING —— 这类输入走硬件是**必然失败**（画面的一部分绑不上 GPU 滤镜），不是慢一点的问题。
 

@@ -327,7 +327,7 @@ class TestEndToEndBurn:
             "-o",
             str(out),
             "--encode",
-            "cpu",
+            "h264",
             "-c",
             str(cli_config_yaml),
         ]
@@ -384,7 +384,7 @@ class TestEndToEndBurn:
             video_in=str(sample_video),
             xml_in=str(sample_xml),
             video_out=str(out),
-            encode_mode="cpu",
+            encode_mode="h264",
             config=e2e_config,
         )
         burner.run()
@@ -407,7 +407,7 @@ class TestEndToEndBurn:
             video_in=str(sample_video),
             xml_in=str(empty_xml),
             video_out=str(control),
-            encode_mode="cpu",
+            encode_mode="h264",
             config=e2e_config,
         ).run()
         assert control.exists() and control.stat().st_size > 0
@@ -447,7 +447,7 @@ class TestEndToEndBurn:
             video_in=str(sample_video),
             xml_in=str(late_event_xml),
             video_out=str(late),
-            encode_mode="cpu",
+            encode_mode="h264",
             config=e2e_config,
         ).run()
 
@@ -491,7 +491,7 @@ class TestEndToEndBurn:
             video_in=str(sample_video),
             xml_in=str(sample_xml),
             video_out=str(out),
-            encode_mode="cpu",
+            encode_mode="h264",
             config=e2e_config,
             check_only=True,
         )
@@ -518,7 +518,7 @@ class TestEndToEndBurn:
                 video_in=str(sample_video),
                 xml_in=str(sample_xml),
                 video_out=str(out),
-                encode_mode="cpu",
+                encode_mode="h264",
                 config=e2e_config,
             )
         # 原有文件必须原封不动

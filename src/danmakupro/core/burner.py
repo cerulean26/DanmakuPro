@@ -19,6 +19,7 @@ from ..input.parser import parse_xml
 from ..layout.engine import LayoutEngine
 from ..render.assets import AssetLoader
 from ..render.layout_builder import DanmakuLayoutBuilder
+from ..encode.capability import pipeline_label
 from ..encode.ffmpeg import FFmpegManager
 from ..utils.validation import (
     validate_video_input,
@@ -40,7 +41,7 @@ class DanmakuBurner:
         video_in: str,
         xml_in: str,
         video_out: str | None = None,
-        encode_mode: str = EncodeMode.AUTO,
+        encode_mode: str = EncodeMode.H264,
         config: DanmakuConfig = DEFAULT_CONFIG,
         force: bool = False,
         check_only: bool = False,
@@ -52,11 +53,8 @@ class DanmakuBurner:
             video_out: 输出视频路径
             encode_mode: 编码模式
             config: 弹幕配置
-            force: 输出文件已存在时是否跳过确认直接覆盖。为 False 时在
-                交互式终端询问用户，非交互环境则拒绝覆盖（提示 -f）
-            check_only: 仅做资源检查，不压制。为 True 时跳过输出路径校验 ——
-                检查模式不产出任何文件，校验「输出文件已存在」没有意义，
-                反而会被上一次失败留下的残缺产物挡在门外。
+            force: 输出文件已存在时是否跳过确认直接覆盖
+            check_only: 仅做资源检查，不压制（跳过输出路径校验以避免被残留文件阻挡）
         """
         validate_video_input(video_in)
         validate_xml_input(xml_in)
@@ -94,11 +92,10 @@ class DanmakuBurner:
     ) -> tuple[list[DanmakuEvent], dict, dict]:
         """准备阶段（Step 1-3）：解析 XML、加载资源、读取视频元数据。
 
-        check() 与 run() 共用，避免两处各写一遍近 60 行、改一处漏一处。
+        check() 与 run() 共用，避免两处各写一遍、改一处漏一处。
 
-        ffprobe（子进程，约 0.23s）与「解析 XML → 加载资源」（约 0.33s）
-        互不依赖，故把前者丢进后台线程并发执行：串行 0.56s → 并发
-        max(0.33s, 0.23s)，实测省下约 0.23s 纯等待。
+        视频元数据由子进程 ffprobe 探测，与本地的「解析 XML → 加载资源」
+        互不依赖，故两者并发执行以缩短等待。
 
         Returns:
             (events, resource, v_info)。resource 为 AssetLoader.load_assets
@@ -144,17 +141,6 @@ class DanmakuBurner:
             f"{total_frames} 帧 ({total_frames / fps:.0f}s)"
         )
 
-        # 用 .get 而非下标：vfr 是后加的字段，老调用方（含测试中的 mock）
-        # 可能只给四个基本键，缺键时按「非 VFR」处理。
-        if v_info.get("vfr"):
-            # 帧率口径已按 frames/duration 修正（见 FFmpegManager
-            # ._resolve_render_fps），时间轴不会漂移，这里只提示观感影响。
-            logger.warning(
-                "变帧率(VFR)素材：全片帧率不恒定。"
-                "弹幕已按真实平均帧率生成，时间轴与画面对齐，"
-                "但画面帧率波动时弹幕运动可能略有顿挫"
-            )
-
         return events, resource, v_info
 
     def check(self) -> None:
@@ -182,13 +168,8 @@ class DanmakuBurner:
         duration = total_frames / fps
 
         # 编码器可用性（已在 __init__ 中探测）
-        _PIPELINE_LABELS: dict[str, str] = {
-            "gpu": "GPU (NVENC)",
-            "qsv": "QSV",
-            "cpu": "CPU (libx264)",
-        }
         pipeline = self._frame_encoder.active_pipeline
-        pipeline_label = _PIPELINE_LABELS.get(pipeline, pipeline)
+        pl_label = pipeline_label(pipeline)
 
         # ── 发射能力评估 ──
         anim = cfg.animation
@@ -269,7 +250,7 @@ class DanmakuBurner:
         lines.extend(
             _asset_lines("礼物图片", resource["used_gift"], resource["missing_gift"])
         )
-        lines.append(f"\n  ⚙️  编码器: {pipeline_label}")
+        lines.append(f"\n  ⚙️  编码器: {pl_label}")
         issues = 3 - ok_count
         if issues == 0:
             lines.append("\n  ✅ 所有资源完整，可以开始压制")
@@ -281,12 +262,6 @@ class DanmakuBurner:
 
     def run(self) -> None:
         """执行完整的弹幕压制流程。
-
-        按顺序执行 4 个步骤：
-        1. 解析弹幕 XML
-        2. 加载资源文件
-        3. 获取视频元数据
-        4. 启动 FFmpeg 编码器 + 压制渲染
 
         Raises:
             DanmakuProError: 弹幕压制相关的已知错误
