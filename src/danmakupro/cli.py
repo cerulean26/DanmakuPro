@@ -104,8 +104,8 @@ def main() -> None:
         )
 
     ensure_qt_app()
-    config = load_config(args.config)
     try:
+        config = load_config(args.config)
         burner = DanmakuBurner(
             video_in=args.video,
             xml_in=args.xml,
@@ -122,7 +122,7 @@ def main() -> None:
         logger.warning("已取消")
         raise SystemExit(EXIT_INTERRUPTED)
     except Exception as e:
-        handle_error(e, component="cli", operation="create_burner")
+        handle_error(e, component="cli", operation="startup")
         raise SystemExit(1)
 
     # 捕获处理Burner时的异常，避免程序崩溃

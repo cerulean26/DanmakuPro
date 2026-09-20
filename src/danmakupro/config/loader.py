@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 from loguru import logger
 
+from ..errors import ConfigError
 from .models import DanmakuConfig, DEFAULT_CONFIG
 
 
@@ -91,6 +92,9 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
 
     Returns:
         DanmakuConfig 实例
+
+    Raises:
+        ConfigError: 文件存在但无法解析，或字段取值非法。
     """
     user_data: dict[str, Any] = {}
     loaded_from: Path | None = None
@@ -104,8 +108,7 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
                 with open(path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
             except yaml.YAMLError as e:
-                logger.error("配置文件解析失败: {} - {}", path, e)
-                raise
+                raise ConfigError(f"配置文件解析失败: {path} - {e}") from e
             if data is not None:
                 user_data = data
                 loaded_from = path
@@ -113,7 +116,12 @@ def load_config(config_path: str | Path | None = None) -> DanmakuConfig:
 
     if user_data:
         assert loaded_from is not None
+        if not isinstance(user_data, dict):
+            raise ConfigError(f"配置文件顶层必须是键值映射: {loaded_from}")
         logger.info("已加载配置文件: {}", loaded_from.resolve())
-        return _dict_to_config(user_data, DanmakuConfig)
+        try:
+            return _dict_to_config(user_data, DanmakuConfig)
+        except (TypeError, ValueError) as e:
+            raise ConfigError(f"配置文件字段非法: {loaded_from} - {e}") from e
     logger.info("未找到配置文件，使用内置默认值")
     return DEFAULT_CONFIG

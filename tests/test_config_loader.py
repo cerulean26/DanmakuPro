@@ -1,5 +1,5 @@
 import pytest
-import yaml
+
 from danmakupro.config.loader import (
     _is_dataclass_type,
     _dict_to_config,
@@ -12,6 +12,7 @@ from danmakupro.config.models import (
     LayoutStyle,
     DEFAULT_CONFIG,
 )
+from danmakupro.errors import ConfigError
 
 
 # =============================================================================
@@ -108,10 +109,31 @@ class TestLoadConfig:
         cfg = load_config()
         assert cfg is DEFAULT_CONFIG
 
-    def test_invalid_yaml_raises(self, tmp_path):
+    def test_invalid_yaml_raises_config_error(self, tmp_path):
+        """语法错误必须是 ConfigError：CLI 靠 category 决定报错文案。"""
         yaml_path = tmp_path / "bad.yaml"
         yaml_path.write_text(": : :\n", encoding="utf-8")
-        with pytest.raises(yaml.YAMLError):
+        with pytest.raises(ConfigError, match="配置文件解析失败"):
+            load_config(str(yaml_path))
+
+    def test_invalid_field_type_raises_config_error(self, tmp_path):
+        """语法合法但字段类型不对（str 传给 int 字段）也要归到 config。"""
+        yaml_path = tmp_path / "bad_type.yaml"
+        yaml_path.write_text("style:\n  font_size: abc\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="字段非法"):
+            load_config(str(yaml_path))
+
+    def test_out_of_range_field_raises_config_error(self, tmp_path):
+        yaml_path = tmp_path / "bad_range.yaml"
+        yaml_path.write_text("style:\n  font_size: -5\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="字段非法"):
+            load_config(str(yaml_path))
+
+    def test_non_mapping_top_level_raises_config_error(self, tmp_path):
+        """顶层是列表时不能静默套用默认值 —— 用户会以为配置生效了。"""
+        yaml_path = tmp_path / "list.yaml"
+        yaml_path.write_text("- a\n- b\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="顶层必须是键值映射"):
             load_config(str(yaml_path))
 
     def test_yaml_null_returns_default(self, tmp_path):

@@ -248,6 +248,36 @@ class TestCLIErrorPaths:
                 main()
         assert exc.value.code == 1
 
+    def test_bad_yaml_reports_config_error(self, tmp_path):
+        """坏 YAML 必须 exit 1 + 单行 `[config]` 日志，不能吐栈回溯。
+
+        其余用例都把 load_config 换成了替身，覆盖不到真实解析路径 ——
+        load_config 曾位于 try 之外，`-c bad.yaml` 会把 ParserError 直接
+        抛给用户。
+        """
+        video = tmp_path / "v.mp4"
+        video.touch()
+        xml = tmp_path / "d.xml"
+        xml.touch()
+        bad = tmp_path / "bad.yaml"
+        bad.write_text(": : :\n", encoding="utf-8")
+
+        with (
+            patch("sys.argv", ["danmakupro", str(video), str(xml), "-c", str(bad)]),
+            patch("danmakupro.cli.configure_logger"),
+            patch("danmakupro.cli.ensure_qt_app"),
+            patch("danmakupro.cli.DanmakuBurner"),
+            patch("danmakupro.cli.QApplication"),
+            patch("danmakupro.cli.logger") as mock_logger,
+        ):
+            with pytest.raises(SystemExit) as exc:
+                main()
+
+        assert exc.value.code == 1
+        msg = mock_logger.error.call_args[0][0]
+        assert "[config]" in msg
+        assert "配置文件解析失败" in msg
+
     def test_check_flag_only_checks(self):
         """--check 只做资源检查，绝不能真的压制。"""
         with _patched_cli("v.mp4", "d.xml", "--check") as (mock_cls, _):
