@@ -1,12 +1,7 @@
-"""弹幕压制核心引擎
-
-DanmakuBurner 是弹幕压制的编排器，负责步骤串联。
-渲染管线由 RenderPipeline 负责。
-"""
+"""弹幕压制核心引擎"""
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING
@@ -71,7 +66,6 @@ class DanmakuBurner:
 
         self.video_out = Path(self.video_out).as_posix()
 
-        # check_only 下不校验输出路径：见 __init__ 的 check_only 说明。
         if not check_only:
             validate_output_path(self.video_out, force)
 
@@ -90,49 +84,30 @@ class DanmakuBurner:
     def _prepare_events_and_video_info(
         self,
     ) -> tuple[list[DanmakuEvent], dict, dict]:
-        """准备阶段（Step 1-3）：解析 XML、加载资源、读取视频元数据。
-
-        check() 与 run() 共用，避免两处各写一遍、改一处漏一处。
-
-        视频元数据由子进程 ffprobe 探测，与本地的「解析 XML → 加载资源」
-        互不依赖，故两者并发执行以缩短等待。
-
-        Returns:
-            (events, resource, v_info)。resource 为 AssetLoader.load_assets
-            的返回值，v_info 为 FFmpegManager.get_video_info 的返回值。
-
-        Raises:
-            RuntimeError: 未安装 ffprobe
-        """
+        """解析 XML、加载资源、读取视频元数据，check() 与 run() 共用。"""
         cfg = self._config
-        with ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="prepare",
-        ) as pool:
-            video_info_future = pool.submit(self._frame_encoder.get_video_info)
+        events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
+        text_count = sum(1 for e in events if not e.is_gift)
+        t_min = events[0].time if events else 0.0
+        t_max = events[-1].time if events else 0.0
+        logger.info(
+            f"[1] 解析 XML → {len(events)} 事件"
+            f" (文本 {text_count}+礼物 {len(events) - text_count}),"
+            f" {t_min:.1f}~{t_max:.1f}s"
+        )
 
-            events = parse_xml(self.xml_in, min_gift_price=cfg.animation.min_gift_price)
-            text_count = sum(1 for e in events if not e.is_gift)
-            t_min = events[0].time if events else 0.0
-            t_max = events[-1].time if events else 0.0
-            logger.info(
-                f"[1] 解析 XML → {len(events)} 事件"
-                f" (文本 {text_count}+礼物 {len(events) - text_count}),"
-                f" {t_min:.1f}~{t_max:.1f}s"
-            )
+        resource = self._asset_provider.load_assets(events)
+        emoji_used = len(resource["used_emoji"])
+        emoji_missing = len(resource["missing_emoji"])
+        gift_used = len(resource["used_gift"])
+        gift_missing = len(resource["missing_gift"])
+        logger.info(
+            f"[2] 加载资源 → "
+            f"Emoji {emoji_used - emoji_missing}/{emoji_used}, "
+            f"礼物 {gift_used - gift_missing}/{gift_used}"
+        )
 
-            resource = self._asset_provider.load_assets(events)
-            emoji_used = len(resource["used_emoji"])
-            emoji_missing = len(resource["missing_emoji"])
-            gift_used = len(resource["used_gift"])
-            gift_missing = len(resource["missing_gift"])
-            logger.info(
-                f"[2] 加载资源 → "
-                f"Emoji {emoji_used - emoji_missing}/{emoji_used}, "
-                f"礼物 {gift_used - gift_missing}/{gift_used}"
-            )
-
-            v_info = video_info_future.result()
+        v_info = self._frame_encoder.get_video_info()
 
         fps: float = float(v_info["fps"])
         total_frames: int = int(v_info["frames"])
@@ -144,15 +119,7 @@ class DanmakuBurner:
         return events, resource, v_info
 
     def check(self) -> None:
-        """资源完整性检查模式 —— 不执行实际压制。
-
-        在正式压制前运行，输出以下诊断信息：
-        - 视频元数据（分辨率 / 帧率 / 时长 / 总帧数）
-        - 弹幕事件统计（总数 / 文本 / 礼物）
-        - 字体覆盖率（缺失字符及 Unicode 码点）
-        - Emoji / 礼物图片缺失清单
-        - 编码器可用性（GPU / QSV / CPU）
-        """
+        """资源完整性检查，不执行实际压制。"""
         cfg = self._config
         events, resource, v_info = self._prepare_events_and_video_info()
 
@@ -167,11 +134,9 @@ class DanmakuBurner:
         total_frames: int = int(v_info["frames"])
         duration = total_frames / fps
 
-        # 编码器可用性（已在 __init__ 中探测）
         pipeline = self._frame_encoder.active_pipeline
         pl_label = pipeline_label(pipeline)
 
-        # ── 发射能力评估 ──
         anim = cfg.animation
         text_rate = text_count / duration if duration > 0 else 0
         gift_rate = gift_count / duration if duration > 0 else 0
@@ -211,7 +176,6 @@ class DanmakuBurner:
             ]
         )
 
-        # ── 构建报告（拼为单条消息，避免 print/log 交叉错位） ──
         lines: list[str] = []
         sep = "=" * 60
         lines.append("")
@@ -261,18 +225,7 @@ class DanmakuBurner:
         logger.opt(raw=True).info("\n".join(lines))
 
     def run(self) -> None:
-        """执行完整的弹幕压制流程。
-
-        Raises:
-            DanmakuProError: 弹幕压制相关的已知错误
-            RuntimeError: 不可恢复的致命错误
-            KeyboardInterrupt: 用户中断（记录警告后原样上抛，
-                中断必须继续向上传播，否则调用方会误判为压制成功）
-
-        Note:
-            无论成功、失败还是中断，finally 块都会执行资源清理；
-            中断与失败一样会删除不完整的输出文件。
-        """
+        """执行完整的弹幕压制流程。"""
         cfg = self._config
         style = cfg.style
         syscfg = cfg.system
@@ -288,7 +241,6 @@ class DanmakuBurner:
         w = int(((raw_w + align - 1) // align) * align)
         h = int(((raw_h + align - 1) // align) * align)
 
-        # Step 4-6: 布局计算、构建器初始化、编码命令（均为瞬时操作）
         layout_params, layer_params = LayoutEngine.calculate_params(
             w,
             h,
@@ -308,7 +260,6 @@ class DanmakuBurner:
 
         ffmpeg_cmd = self._frame_encoder.build_command(fps, w, h, layer_params)
 
-        # Step 4
         pipeline = RenderPipeline(
             self._frame_encoder,
             self._config,
@@ -342,32 +293,20 @@ class DanmakuBurner:
             )
         except KeyboardInterrupt:
             failed = True
-            # 标记中断，让 cleanup 不要把 FFmpeg 的退出报成「压制成功/失败」。
             self._frame_encoder.interrupted = True
-            # 收尾要等 FFmpeg 退出、删除残缺产物，可能耗时，先给即时反馈。
             logger.warning("收到中断信号，正在收尾…")
-            # 必须继续抛出。吞掉中断会让进程以 0 退出，脚本/编排方无法把
-            # 「用户按了 Ctrl+C」和「压制成功」区分开，残缺产物也会被当成成品。
-            # 资源清理由 finally 负责，抛出不影响收尾。
             raise
         except DanmakuProError:
             failed = True
             raise
         except Exception as e:
             failed = True
-            # 用 ErrorHandler.classify 保留原始异常的类别，而不是一律包成
-            # RuntimeError（那会让 _classify_error 把一切都归为 RENDER）。
             raise DanmakuProError(
                 f"压制失败: {e}",
                 category=ErrorHandler.classify(e),
                 context=ErrorContext(component="burner", operation="run"),
             ) from e
         finally:
-            # 中断可能恰好落在收尾期间：Ctrl+C 会同时送达 Python 与
-            # ffmpeg，两者到达时刻有先后，若中断在 cleanup() 等待 FFmpeg
-            # 退出时到达，就会从 finally 中抛出，跳过后面的产物清理 ——
-            # 残缺文件留下，下次运行又被「输出文件已存在」挡住。
-            # 嵌套 try/finally 保证无论收尾是否被打断，清理都会执行。
             try:
                 self._frame_encoder.cleanup()
             finally:
@@ -375,14 +314,7 @@ class DanmakuBurner:
                     self._discard_incomplete_output()
 
     def _discard_incomplete_output(self) -> None:
-        """删除未成功完成时留下的残缺输出文件。
-
-        失败或中断后残留的 0 字节（或半截）mp4 会让下次运行卡在
-        「输出文件已存在」，而用户往往不知道那是上一次失败留下的产物。
-        成功路径不会调用本方法。
-
-        删除失败只警告不抛出：清理失败不应掩盖真正的压制错误。
-        """
+        """删除失败或中断后残留的残缺输出文件。"""
         path = Path(self.video_out)
         if not path.exists():
             return
@@ -431,19 +363,7 @@ class DanmakuBurner:
         total_gift_spawned: int,
         t_start: float,
     ) -> None:
-        """输出渲染完成统计信息，包括未发射弹幕警告。
-
-        Args:
-            events: 弹幕事件列表
-            layout_ctx: 布局上下文（含 text_event_idx 和 gift_event_idx）
-            fps: 视频帧率
-            total_frames: 总帧数
-            total_text_danmaku: 文本弹幕总数
-            total_gift_danmaku: 礼物弹幕总数
-            total_text_spawned: 实际发射的文本弹幕数
-            total_gift_spawned: 实际发射的礼物弹幕数
-            t_start: 渲染开始时间（perf_counter）
-        """
+        """输出渲染完成统计与未发射弹幕警告。"""
         elapsed = time.perf_counter() - t_start
         video_duration = total_frames / fps
         logger.info(

@@ -2,7 +2,6 @@ import pytest
 import yaml
 from danmakupro.config.loader import (
     _is_dataclass_type,
-    _warn_type_mismatch,
     _dict_to_config,
     _config_priority_paths,
     load_config,
@@ -31,23 +30,6 @@ class TestIsDataclassType:
 
     def test_string_returns_false(self):
         assert _is_dataclass_type("AnimationConfig") is False
-
-
-# =============================================================================
-# _warn_type_mismatch
-# =============================================================================
-
-
-class TestWarnTypeMismatch:
-    def test_bool_does_not_raise(self):
-        _warn_type_mismatch(True, "system.enabled")
-        _warn_type_mismatch(False, "style.fade_out")
-
-    def test_non_bool_does_not_raise(self):
-        _warn_type_mismatch(42, "style.font_size")
-        _warn_type_mismatch("hello", "style.font_name")
-        _warn_type_mismatch(3.14, "animation.speed")
-        _warn_type_mismatch(None, "system.optional")
 
 
 # =============================================================================

@@ -8,7 +8,7 @@ from typing import cast
 from PySide6.QtWidgets import QApplication
 
 
-# Emoji 标记正则表达式
+#: Emoji 标记正则表达式
 EMOJI_PATTERN = re.compile(r"\[([^\]]+)\]")
 
 

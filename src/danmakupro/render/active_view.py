@@ -12,7 +12,7 @@ from ..layout.active import ActiveDanmaku
 
 
 class ActiveDanmakuView:
-    """Qt-aware wrapper around ActiveDanmaku.
+    """ActiveDanmaku 的 Qt 渲染包装。
 
     职责：
         - 代理 ActiveDanmaku 的所有数据属性（通过 __getattr__）

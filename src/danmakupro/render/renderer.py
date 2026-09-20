@@ -92,9 +92,6 @@ class DanmakuRenderer:
         ``canvas.fill()`` 会就地改写这块内存，此前取到的内容随之改变。
         正确性依赖于调用方「同步写入完毕后再绘制下一帧」这一前提。
 
-        Args:
-            无
-
         Returns:
             画布像素数据的 memoryview 视图（仅在下一次 render_frame 前有效）
 

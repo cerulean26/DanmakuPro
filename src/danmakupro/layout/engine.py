@@ -44,26 +44,19 @@ class LayoutEngine:
         spawn_interval: float,
         max_latency: float | None,
     ) -> float:
-        """按积压量自适应收紧发射间隔，使等待时长保持有界。
+        """按积压量自适应收紧发射间隔。
 
-        基础排空速率为 ``batch_size / spawn_interval``。当积压超过一个批次、
-        且按基础速率清空积压所需时间超过 ``max_latency`` 时，临时缩短间隔，
-        把排空速率提升到 ``pending / max_latency``，否则沿用基础间隔。
-
-        与固定间隔不同，此控制律下积压收敛到有界平衡点而非单调增长，故不会
-        出现「长期滞后于画面」或「结束时队列残留被丢弃」。实际排空速率还有
-        天然上限：间隔门每帧最多触发一次，故不超过 ``batch_size × fps``。
-
-        依据见 ``docs/decisions/ADR-0004-spawn-interval-control-law.md``。
+        当积压超过一个批次且清空时间超过 ``max_latency`` 时，
+        临时提升排空速率至 ``pending / max_latency``，否则沿用基础间隔。
 
         Args:
-            pending: 当前时间窗口内尚未发射的同层弹幕数
+            pending: 待发射的同层弹幕数
             batch_size: 单次发射上限
             spawn_interval: 基础发射间隔（秒）
-            max_latency: 允许的最大积压等待时长（秒）；None 表示禁用自适应
+            max_latency: 允许的最大积压等待时长（秒），None 禁用自适应
 
         Returns:
-            本帧应使用的发射间隔（秒）
+            本帧发射间隔（秒）
         """
         if max_latency is None or spawn_interval <= 0 or pending <= batch_size:
             return spawn_interval
@@ -139,19 +132,12 @@ class LayoutEngine:
         asset_provider: "AssetLoader",
         style: LayoutStyle = DEFAULT_CONFIG.style,
     ) -> tuple[bool, bool, int, int]:
-        """根据当前时间按需生成新弹幕（惰性创建模式）。
+        """惰性按需生成新弹幕。
 
-        只扫描原始 DanmakuEvent 列表，弹幕对象在发射时按需构建，
-        避免预创建所有 ActiveDanmaku 带来的内存压力。
+        文本和礼物使用独立的 event_idx 互不阻塞。
+        无积压时立即发射，有积压时按批次限流，
+        间隔由 :meth:`effective_spawn_interval` 自适应收紧。
 
-        文本和礼物使用独立的 event_idx，互不阻塞：
-        文本积压不会挡住排在后面的礼物，反之亦然。
-
-        无积压时（待处理量 <= batch_size）立即发射，无需等待间隔；
-        有积压时启用时间窗口和批次限制，平滑弹幕密度。
-        积压超过一个批次时，间隔按 ``max_spawn_latency`` 自适应收紧
-        （见 :meth:`effective_spawn_interval`），避免积压无界累积导致
-        弹幕滞后或视频结束时被丢弃。
         Returns:
             (text_has_new, gift_has_new, text_emitted, gift_emitted)
         """
@@ -237,7 +223,7 @@ class LayoutEngine:
         n = len(pool)
         idx = getattr(ctx, idx_attr)
 
-        # ── 统计时间窗口内的待处理量，并确定扫描终点 ──────────
+        # ---- 统计时间窗口内的待处理量，并确定扫描终点 ----
         pending = 0
         scan_end = idx
         for i in range(idx, n):
@@ -263,7 +249,7 @@ class LayoutEngine:
         if not can_spawn:
             return 0
 
-        # ── 按批次上限发射，游标扫过窗口内全部事件 ──────────
+        # ---- 按批次上限发射，游标扫过窗口内全部事件 ----
         emitted = 0
         while idx < scan_end and emitted < batch_size:
             event = pool[idx]

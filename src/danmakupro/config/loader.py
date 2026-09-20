@@ -53,19 +53,6 @@ def _config_priority_paths(config_path: str | Path | None = None) -> list[Path]:
 # =============================================================================
 
 
-def _warn_type_mismatch(value: Any, field_path: str) -> None:
-    """对 YAML 解析后常见的类型陷阱发出预警（如 no→False, yes→True）。"""
-    # YAML 把 "no"/"yes"/"on"/"off" 解析为 bool 是常见坑
-    if isinstance(value, bool):
-        logger.warning(
-            '{}: 值为布尔 {}，如果你本意是字符串，请加引号包裹（如 "yes"）',
-            field_path,
-            value,
-        )
-    # 纯数字字符串被解析为 int/float 通常符合预期，不警告
-    # 其他类型不匹配交给业务逻辑自然报错，此处不做强制校验
-
-
 def _dict_to_config(data: dict, config_cls: type[Any]) -> Any:
     """递归将字典转换为 dataclass 实例"""
     type_hints = typing.get_type_hints(config_cls)
@@ -79,7 +66,6 @@ def _dict_to_config(data: dict, config_cls: type[Any]) -> Any:
         if _is_dataclass_type(field_type):
             kwargs[f.name] = _dict_to_config(value, typing.cast(type[Any], field_type))
         else:
-            _warn_type_mismatch(value, f"{config_cls.__name__}.{f.name}")
             kwargs[f.name] = value
 
     unknown_keys = set(data) - field_names
