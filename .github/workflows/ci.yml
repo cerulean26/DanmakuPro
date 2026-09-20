@@ -85,7 +85,7 @@ jobs:
           python-version: "3.13"
 
       - name: Build
-        run: uv build
+        run: uv build --no-create-gitignore
 
       - name: Release
         uses: softprops/action-gh-release@v2
