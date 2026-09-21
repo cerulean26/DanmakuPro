@@ -346,13 +346,11 @@ class TestConfirmOverwrite:
         monkeypatch.setattr(sys, "stdin", None)
         assert confirm_overwrite(self._existing(tmp_path)) is False
 
-    def test_zero_byte_file_is_reported_as_leftover(
-        self, tmp_path, monkeypatch, log_messages
-    ):
-        """0 字节文件应在提示里点明「疑似上次失败的残留」，帮用户判断。"""
+    def test_zero_byte_file_reports_size(self, tmp_path, monkeypatch, log_messages):
+        """0 字节文件只报告体积，不做「残留」猜测。"""
         self._interactive(monkeypatch, "n")
         assert confirm_overwrite(self._existing(tmp_path)) is False
-        assert any("0 字节" in m and "残留" in m for m in log_messages)
+        assert any("0 字节" in m for m in log_messages)
 
     def test_sized_file_reports_human_readable_size(
         self, tmp_path, monkeypatch, log_messages

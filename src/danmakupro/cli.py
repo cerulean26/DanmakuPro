@@ -1,7 +1,13 @@
 """命令行入口模块
 
 用法: danmakupro video.mp4 danmaku.xml
-     danmakupro source/5.flv source/5.xml --encode gpu --config ./danmakupro.yaml -f
+     danmakupro source/5.flv source/5.xml --encode h264_nvenc -c ./danmakupro.yaml -f
+     danmakupro video.mp4 danmaku.xml --check
+     danmakupro --init-config
+
+`--encode` 的合法取值即 EncodeMode 的字面量（9 个：h264 / h264_nvenc / h264_qsv / h265 /
+h265_nvenc / h265_qsv / av1 / av1_nvenc / av1_qsv），其余取值由 argparse 以退出码 2 拒绝。
+完整说明见 docs/configuration.md。
 """
 
 from __future__ import annotations
@@ -84,13 +90,13 @@ def main() -> None:
         "--check",
         action="store_true",
         default=False,
-        help="仅检查资源完整性，不执行压制（字体/图片覆盖率、视频信息）",
+        help="仅检查不压制（视频信息、弹幕统计、资源覆盖率、发射能力与编码器）",
     )
     parser.add_argument(
         "--init-config",
         action="store_true",
         default=False,
-        help="在当前目录生成配置模板 danmakupro.yaml 后退出",
+        help="生成配置模板后退出（默认 ./danmakupro.yaml，-c 可指定路径）",
     )
     args = parser.parse_args()
     configure_logger()

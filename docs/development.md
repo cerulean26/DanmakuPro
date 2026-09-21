@@ -41,7 +41,8 @@ DanmakuPro/
 ├── tests/                    # 测试（22 个模块；test_e2e_burn.py 为真机用例，标记 slow）
 ├── docs/                     # 文档
 │   ├── configuration.md      # 完整参数表与配置查找规则
-│   └── development.md        # 本文件
+│   ├── development.md        # 本文件
+│   └── decisions/            # ADR 架构决策记录（8 篇）
 ├── assets/                   # Emoji / 礼物 PNG / 特效资源（本地，未纳入版本控制）
 │   ├── emoji/
 │   ├── gift/

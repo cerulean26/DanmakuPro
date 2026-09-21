@@ -80,7 +80,7 @@ danmakupro --init-config -c my.yaml   # 或指定路径；已存在时不覆盖�
 | `gift_spawn_batch_size` | 2 | 礼物弹幕每次发射数量 |
 | `max_spawn_latency` | 2.0 | 有界延迟自适应：积压时按此目标时长收紧间隔（秒），`null` 禁用 |
 | `gift_dwell_time` | 5.0 | 礼物停留时间（秒），null=永不消失 |
-| `min_gift_price` | 0.0 | 最低礼物价格过滤（元），0 = 不过滤 |
+| `min_gift_price` | 1.0 | 最低礼物价格过滤（元），0 = 不过滤 |
 
 ### 编码参数 (encode)
 

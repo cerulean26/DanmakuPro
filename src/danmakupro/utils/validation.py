@@ -84,10 +84,7 @@ def confirm_overwrite(path: Path) -> bool:
         # 直接放行比抛一个含义模糊的 OSError 更合理。
         return True
 
-    if stat.st_size == 0:
-        detail = "0 字节，疑似上次运行失败留下的残留"
-    else:
-        detail = _human_size(stat.st_size)
+    detail = "0 字节" if stat.st_size == 0 else _human_size(stat.st_size)
     when = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
     logger.warning(f"输出文件已存在: {path}（{detail}，最后修改 {when}）")
 
